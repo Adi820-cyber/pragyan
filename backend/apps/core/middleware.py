@@ -4,12 +4,12 @@ from apps.core.context import (
     set_current_tenant_id,
     set_current_user_id,
 )
-from apps.core.models import Tenant
+from apps.core.models import Tenant, Membership
 
 
 class TenantContextMiddleware:
     """
-    Extracts tenant context from request header (X-Tenant-ID) or authenticated user session.
+    Extracts tenant and actor context from request headers or authenticated user session.
     Configures contextvars and PostgreSQL session variables for RLS enforcement.
     """
     def __init__(self, get_response):
@@ -17,7 +17,9 @@ class TenantContextMiddleware:
 
     def __call__(self, request):
         tenant_header = request.headers.get("X-Tenant-ID")
+        actor_header = request.headers.get("X-Actor-ID") or request.headers.get("X-Membership-ID")
         tenant_id = None
+        membership = None
 
         if tenant_header:
             try:
@@ -33,7 +35,22 @@ class TenantContextMiddleware:
 
         # Bind thread-local context
         set_current_tenant_id(tenant_id)
-        if hasattr(request, "user") and request.user.is_authenticated:
+
+        # Resolve actor membership within the active tenant
+        if tenant_id and actor_header:
+            try:
+                actor_uuid = uuid.UUID(actor_header)
+                membership = Membership.objects.filter(tenant_id=tenant_id, id=actor_uuid).first()
+            except ValueError:
+                membership = Membership.objects.filter(tenant_id=tenant_id, email=actor_header).first()
+        elif tenant_id and hasattr(request, "user") and request.user.is_authenticated:
+            membership = Membership.objects.filter(tenant_id=tenant_id, email=request.user.email).first()
+
+        request.membership = membership
+
+        if membership:
+            set_current_user_id(str(membership.id))
+        elif hasattr(request, "user") and request.user.is_authenticated:
             set_current_user_id(str(request.user.pk))
         else:
             set_current_user_id(None)

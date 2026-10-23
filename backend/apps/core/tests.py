@@ -117,3 +117,94 @@ class ReskureCoreArchitectureTests(TestCase):
         self.assertEqual(risk.inherent_severity, "CRITICAL")
         self.assertEqual(risk.residual_score, 4)   # 2 * 2
         self.assertEqual(risk.residual_severity, "LOW")
+
+
+class ReskureApiEndpointsTest(TestCase):
+    def setUp(self):
+        from rest_framework.test import APIClient
+        from apps.compliance.models import Framework, Control
+        from apps.secops.models import AlertSource, SecurityAlert
+
+        self.client = APIClient()
+        self.tenant = Tenant.objects.create(name="Acme Test Tenant", slug="acme-test")
+        set_current_tenant_id(self.tenant.id)
+
+        self.admin = Membership.objects.create(
+            tenant=self.tenant, email="admin@acme-test.com", role="TENANT_ADMIN"
+        )
+
+        # Framework and control
+        self.framework = Framework.objects.create(
+            code="TEST_NIST", version="1.0", name="Test Framework", is_system=True
+        )
+        self.control = Control.objects.create(
+            framework=self.framework, code="AC-1", title="Access Control Policy",
+            status="IMPLEMENTED", tenant_id=self.tenant.id
+        )
+
+        # Risk
+        self.risk = Risk.objects.create(
+            tenant=self.tenant, title="Test Risk", inherent_likelihood=3, inherent_impact=4
+        )
+
+        # Alert Source & Alert
+        self.alert_src = AlertSource.objects.create(
+            tenant=self.tenant, name="AWS Hub", source_type="AWS_SECURITY_HUB"
+        )
+        self.alert = SecurityAlert.objects.create(
+            tenant=self.tenant, source=self.alert_src, external_alert_id="alert-001",
+            title="Public S3 Bucket", severity="HIGH"
+        )
+
+    def test_openapi_schema_endpoint(self):
+        """Verify OpenAPI 3.0 schema generation."""
+        response = self.client.get("/api/schema/")
+        self.assertEqual(response.status_code, 200)
+
+    def test_swagger_ui_endpoint(self):
+        """Verify Swagger UI renders successfully."""
+        response = self.client.get("/api/docs/")
+        self.assertEqual(response.status_code, 200)
+
+    def test_risk_heatmap_summary_endpoint(self):
+        """Verify 5x5 heatmap summary calculation endpoint."""
+        response = self.client.get(
+            "/api/v1/risks/heatmap_summary/",
+            HTTP_X_TENANT_ID=str(self.tenant.id)
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("matrix_5x5", data)
+        self.assertEqual(data["total_risks"], 1)
+
+    def test_compliance_posture_summary_endpoint(self):
+        """Verify compliance posture calculation endpoint."""
+        response = self.client.get(
+            "/api/v1/controls/posture_summary/",
+            HTTP_X_TENANT_ID=str(self.tenant.id)
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["total_controls"], 1)
+        self.assertEqual(data["implemented"], 1)
+        self.assertEqual(data["compliance_posture_percentage"], 100.0)
+
+    def test_secops_containment_request_endpoint(self):
+        """Verify requesting a containment action creates track-and-approve approval workflow."""
+        response = self.client.post(
+            f"/api/v1/security-alerts/{self.alert.id}/request_containment/",
+            data={
+                "action_type": "ISOLATE_HOST",
+                "target_identifier": "i-0123456789abcdef0",
+                "auto_approve": False,
+                "requested_by_id": str(self.admin.id),
+            },
+            format="json",
+            HTTP_X_TENANT_ID=str(self.tenant.id),
+            HTTP_X_ACTOR_ID=str(self.admin.id),
+        )
+        self.assertEqual(response.status_code, 201)
+        data = response.json()
+        self.assertEqual(data["status"], "PENDING_APPROVAL")
+        self.assertIsNotNone(data["approval_request"])
+
