@@ -43,7 +43,12 @@ export function DatasetRow({ dataset }: { dataset: Dataset }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-sm font-semibold text-slate-100">
-            {dataset.name} {dataset.is_sample && <span className="ml-1 text-[10px] uppercase text-amber-300">sample</span>}
+            {dataset.name}{" "}
+            {dataset.is_real_data ? (
+              <span className="ml-1 text-[10px] uppercase text-sky-300">real public data</span>
+            ) : dataset.is_sample ? (
+              <span className="ml-1 text-[10px] uppercase text-amber-300">synthetic sample</span>
+            ) : null}
           </div>
           <div className="text-xs text-slate-400">
             {dataset.role} · {dataset.row_count.toLocaleString()} rows · {dataset.column_schema.length} columns · {dateOnly(dataset.period_start)} to{" "}

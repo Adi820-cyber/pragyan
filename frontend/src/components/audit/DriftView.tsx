@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { StateBadge } from "@/components/ui/StateBadge";
 import { pct } from "@/lib/format";
-import { METRIC_LABEL, ResultCard, formatValue } from "./ResultCard";
+import { METRIC_LABEL, ResultCard, formatThreshold, formatValue } from "./ResultCard";
 import type { CheckResult } from "@/lib/types";
 
 function chartData(r: CheckResult) {
@@ -69,7 +69,7 @@ export function DriftView({ results }: { results: CheckResult[] }) {
                       </button>
                     </th>
                     <td className="p-2 text-slate-300">{METRIC_LABEL[r.metric] ?? r.metric}</td>
-                    <td className="p-2 text-slate-100">{formatValue(r)}{r.threshold !== null && <span className="text-slate-500"> / {r.threshold}</span>}</td>
+                    <td className="p-2 text-slate-100">{formatValue(r)}{r.threshold !== null && <span className="text-slate-500"> (limit {formatThreshold(r)})</span>}</td>
                     <td className="p-2 text-slate-400">{r.detail.reference_n?.toLocaleString() ?? "?"} / {r.detail.current_n?.toLocaleString() ?? "?"}</td>
                     <td className="p-2"><StateBadge state={r.state} /></td>
                   </tr>

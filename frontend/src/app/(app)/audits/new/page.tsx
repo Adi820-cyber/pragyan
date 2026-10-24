@@ -1,6 +1,7 @@
 import { PageShell } from "@/components/layout/PageShell";
 import { NewAuditWizard } from "@/components/audit/NewAuditWizard";
 import { ErrorState } from "@/components/ui/Panel";
+import { WhatThisShows } from "@/components/ui/WhatThisShows";
 import { errorMessage, list } from "@/lib/server/api";
 import type { AISystem, Dataset, ModelVersion } from "@/lib/types";
 
@@ -25,6 +26,9 @@ export default async function NewAuditPage({ searchParams }: PageProps<"/audits/
 
   return (
     <PageShell title="New audit" subtitle="Pick the inputs, say what the columns mean, and review the policy before anything runs" sample={datasets.some((d) => d.is_sample && !d.is_real_data)} realData={datasets.find((d) => d.is_real_data) ? { source: datasets.find((d) => d.is_real_data)!.source_note } : false}>
+      <WhatThisShows>
+        A short guided set-up for one audit: choose the system, model version and data, tell Reskure which columns mean what, check what will run, and set the policy limits. Nothing runs until the last step.
+      </WhatThisShows>
       {failure ? (
         <ErrorState message={failure} />
       ) : (

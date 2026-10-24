@@ -214,6 +214,8 @@ class AuditRunViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.RetrieveModel
                     frames[key] = load_csv(handle.read(), max_rows=settings.MAX_DATASET_ROWS, max_bytes=settings.MAX_UPLOAD_BYTES)
             except AuditInputError as exc:
                 raise ValidationError({"detail": exc.problems})
+            except FileNotFoundError:
+                raise ValidationError({"detail": [f'The stored file for dataset "{ds.name}" is missing. Upload the dataset again.']})
         try:
             if system.system_type == "llm":
                 cfg = validate_llm_config(cfg, frames["ref"], frames["cur"])

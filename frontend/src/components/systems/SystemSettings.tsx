@@ -20,6 +20,10 @@ export function SystemSettings({ system, people }: { system: AISystem; people: P
     setSaved(false);
     try {
       await call("PATCH", `ai/systems/${system.id}/`, {
+        name: f.get("name"),
+        purpose: f.get("purpose"),
+        decision_affected: f.get("decision_affected") || "",
+        intended_population: f.get("intended_population") || "",
         owner: f.get("owner") || null,
         reviewer: f.get("reviewer") || null,
         jurisdictions: ["DPDP", "GDPR"].filter((j) => f.get(`j_${j}`) === "on"),
@@ -41,6 +45,18 @@ export function SystemSettings({ system, people }: { system: AISystem; people: P
   return (
     <form onSubmit={submit} className="space-y-4">
       <div className="grid md:grid-cols-2 gap-4">
+        <Field label="System name" htmlFor="s_name">
+          <input id="s_name" name="name" required maxLength={200} defaultValue={system.name} className={inputClass} />
+        </Field>
+        <Field label="Decision it affects" htmlFor="s_decision">
+          <input id="s_decision" name="decision_affected" defaultValue={system.decision_affected} className={inputClass} />
+        </Field>
+        <Field label="Purpose" htmlFor="s_purpose">
+          <textarea id="s_purpose" name="purpose" required rows={2} defaultValue={system.purpose} className={inputClass} />
+        </Field>
+        <Field label="Intended population" htmlFor="s_population">
+          <input id="s_population" name="intended_population" defaultValue={system.intended_population} className={inputClass} />
+        </Field>
         <Field label="Owner" htmlFor="s_owner">
           <select id="s_owner" name="owner" defaultValue={system.owner ?? ""} className={inputClass}>
             <option value="">Not assigned</option>

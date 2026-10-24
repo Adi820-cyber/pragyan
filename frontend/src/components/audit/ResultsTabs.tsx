@@ -10,6 +10,7 @@ import { PrivacyView } from "./PrivacyView";
 import { GroundingView } from "./GroundingView";
 import { GovernanceView } from "./GovernanceView";
 import { StateBadge } from "@/components/ui/StateBadge";
+import { WhatThisShows } from "@/components/ui/WhatThisShows";
 import { CATEGORY_LABEL, CATEGORY_ORDER } from "@/lib/format";
 import type { Category, CheckResult, CoverageStatus, Finding, ResultState } from "@/lib/types";
 
@@ -17,6 +18,16 @@ type Coverage = Partial<Record<Category, { status: CoverageStatus; counts: Parti
 
 type Tab = "summary" | Category;
 const TAB_LABEL: Record<string, string> = { summary: "Summary", ...CATEGORY_LABEL };
+
+const TAB_HELP: Record<Tab, string> = {
+  summary: "The overall outcome of this audit: which checks ran, which results a person should look at, and which checks could not be assessed. A check that was not assessed is not a pass.",
+  bias: "Whether different groups of people get different outcomes from this system, and by how much. Each measure shows the number, the policy limit you set, and whether it crossed it. These are early-warning screens, not legal findings.",
+  drift: "Whether the data or the system's outputs have changed between the reference period and the current period. Change is a warning sign that earlier checks may no longer hold, not proof the system got worse.",
+  explainability: "Which inputs the model leans on most and whether any of them could stand in for a protected group. It describes what the model associates with an output, not what causes it.",
+  grounding: "For text-generating systems: how much of each answer is backed by its source, whether it cites sources, and whether it states figures that appear nowhere in the source. It points to answers worth reading, not proof of truth.",
+  privacy: "Where personal data appears in the data you uploaded and in prompts and answers, with values masked. Detectors can miss things, so a clean result is not proof that no personal data is present.",
+  governance: "Whether the vendors, people's rights requests and human review around this system are set up and kept up to date. These come from records your organisation entered, which Reskure cannot verify.",
+};
 
 export function ResultsTabs({
   systemId,
@@ -47,7 +58,7 @@ export function ResultsTabs({
   const notAssessed = results.filter((r) => r.state === "not_applicable" || r.state === "insufficient_evidence" || r.state === "error");
   const headline = results.filter(
     (r) => r.state === "review_required" && ([
-"demographic_parity", "selection_rate_ratio", "equalized_odds", "proxy_screen", "schema", "prediction_distribution", "performance", "minimisation",
+"demographic_parity", "selection_rate_ratio", "equalized_odds", "proxy_screen", "schema", "prediction_distribution", "performance", "minimisation", "feature_distribution", "prediction_rate", "personal_data_indicators", "retention",
       "refusal_gap", "response_length_gap", "score_gap", "groundedness", "unsupported_numbers", "citations", "personal_data_in_text",
       "vendor_dependency", "vendor_register", "vendor_concentration", "human_oversight"].includes(r.check_key) ||
       (r.check_key === "data_rights" && r.metric === "rights_procedure")),
@@ -79,7 +90,8 @@ export function ResultsTabs({
         })}
       </div>
 
-      <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} tabIndex={0} className="focus:outline-none">
+      <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} tabIndex={0} className="focus:outline-none space-y-4">
+        <WhatThisShows>{TAB_HELP[tab]}</WhatThisShows>
         {tab === "summary" && (
           <div className="space-y-6">
             <CoverageStrip coverage={coverage} />
