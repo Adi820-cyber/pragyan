@@ -170,7 +170,7 @@ function FindingDrawer({
   }
 
   const editable = canEdit(role) && finding.status !== "accepted" && finding.status !== "resolved";
-  const isOwner = finding.owner === myMembershipId;
+  const isOwner = finding.owner === myMembershipId || finding.submitted_by === myMembershipId;
   const reviewer = canReview(role) && finding.status === "submitted";
 
   return (
@@ -238,14 +238,18 @@ function FindingDrawer({
         )}
         {reviewer && (
           <>
-            {isOwner && <p className="text-xs text-amber-200">You own this finding, so you cannot review it. Another reviewer must.</p>}
+            {isOwner && (
+              <p className="text-xs text-amber-200 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5">
+                Segregation of duties: because you own or submitted this finding, a different reviewer (such as <code>advisor@hirelens.example</code> or <code>admin</code>) must sign off on it.
+              </p>
+            )}
             <Field label="Review comment" htmlFor="f_review" hint="Required. It is saved with the finding and appears in the report.">
-              <textarea id="f_review" rows={2} value={comment} onChange={(e) => setComment(e.target.value)} className={inputClass} />
+              <textarea id="f_review" rows={2} value={comment} onChange={(e) => setComment(e.target.value)} disabled={isOwner} className={inputClass} />
             </Field>
             <div className="flex flex-wrap gap-2">
-              <button type="button" disabled={busy} onClick={() => act("resolve", true)} className={buttonClass}>Mark resolved</button>
-              <button type="button" disabled={busy} onClick={() => act("accept", true)} className={ghostButtonClass}>Accept the risk</button>
-              <button type="button" disabled={busy} onClick={() => act("send-back", true)} className={ghostButtonClass}>Send back</button>
+              <button type="button" disabled={busy || isOwner} onClick={() => act("resolve", true)} className={buttonClass}>Mark resolved</button>
+              <button type="button" disabled={busy || isOwner} onClick={() => act("accept", true)} className={ghostButtonClass}>Accept the risk</button>
+              <button type="button" disabled={busy || isOwner} onClick={() => act("send-back", true)} className={ghostButtonClass}>Send back</button>
             </div>
             <p className="text-[11px] text-slate-500">Accepting a risk records your decision. It does not change the measurements that raised the finding.</p>
           </>

@@ -17,7 +17,7 @@ param(
   [switch]$Offline,
   [int]$ApiPort = 8000,
   [int]$WebPort = 3000,
-  [string]$DemoPassword = "Demo-Pass-2026"
+  [string]$DemoPassword = "Password123!"
 )
 
 $ErrorActionPreference = "Stop"
@@ -92,7 +92,7 @@ try {
   Write-Host "  App      http://localhost:$WebPort"
   Write-Host "  API      http://localhost:$ApiPort/api/v1/   (docs: /api/docs/ if enabled)"
   if (-not $SkipSeed) {
-    Write-Host "  Login    admin@hirelens.example   (tenant admin)"
+    Write-Host "  Login    admin (or admin@hirelens.example) [tenant admin]"
     Write-Host "           founder@hirelens.example (risk owner)"
     Write-Host "           advisor@hirelens.example (compliance officer)"
     Write-Host "  Password $DemoPassword"

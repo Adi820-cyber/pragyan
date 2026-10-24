@@ -26,7 +26,7 @@ cd backend
 copy .env.example .env          # DEBUG=True for local use
 uv sync
 uv run python manage.py migrate
-uv run python manage.py seed_ai_demo --password "choose-a-password"   # demo org, 3 users, 2 sample systems (see below)
+uv run python manage.py seed_ai_demo --password "Password123!"   # demo org, 3 users, 2 sample systems (see below)
 uv run python manage.py runserver 8000
 uv run python manage.py run_audit_worker                               # second terminal: executes queued audits
 ```
@@ -40,7 +40,10 @@ npm install
 npm run dev        # http://localhost:3000
 ```
 
-Demo users (all synthetic), same password: `founder@hirelens.example` (owner), `advisor@hirelens.example` (reviewer), `admin@hirelens.example`.
+Demo users (all synthetic), same default password (`Password123!`):
+- `admin` or `admin@hirelens.example` (Tenant Admin)
+- `founder@hirelens.example` (Risk Owner / ML Lead)
+- `advisor@hirelens.example` (Compliance Reviewer for Segregation-of-Duties sign-off)
 
 Tests: `cd backend; uv run python manage.py test apps`
 

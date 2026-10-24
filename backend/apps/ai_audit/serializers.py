@@ -168,6 +168,7 @@ class RunRequestSerializer(serializers.Serializer):
 
 class FindingSerializer(TenantBoundSerializer):
     owner_name = serializers.SerializerMethodField()
+    submitted_by_name = serializers.SerializerMethodField()
     reviewed_by_name = serializers.SerializerMethodField()
     system_name = serializers.CharField(source="system.name", read_only=True)
     history = serializers.SerializerMethodField()
@@ -177,16 +178,19 @@ class FindingSerializer(TenantBoundSerializer):
         model = m.Finding
         fields = [
             "id", "system", "system_name", "run", "category", "title", "plain_language", "next_step", "severity",
-            "status", "owner", "owner_name", "due_date", "remediation_note", "reviewed_by_name", "reviewed_at",
-            "review_comment", "history", "result_ids", "created_at",
+            "status", "owner", "owner_name", "due_date", "remediation_note", "submitted_by", "submitted_by_name",
+            "reviewed_by_name", "reviewed_at", "review_comment", "history", "result_ids", "created_at",
         ]
         read_only_fields = [
             "id", "system", "run", "category", "title", "plain_language", "next_step", "severity", "status",
-            "reviewed_at", "review_comment", "created_at",
+            "submitted_by", "reviewed_at", "review_comment", "created_at",
         ]
 
     def get_owner_name(self, obj):
         return _name(obj.owner)
+
+    def get_submitted_by_name(self, obj):
+        return _name(obj.submitted_by)
 
     def get_reviewed_by_name(self, obj):
         return _name(obj.reviewed_by)

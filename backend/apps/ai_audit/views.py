@@ -254,6 +254,26 @@ class AuditRunViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.RetrieveModel
             tenant_id=membership.tenant_id, system=system, model_version=mv, reference_dataset=ref, current_dataset=cur,
             config=cfg, status="queued", created_by=membership, progress_message="Queued",
         )
+        import sys, threading
+        if "test" not in sys.argv:
+            def _bg_worker(target_id):
+                import time
+                from django.db import close_old_connections
+                from apps.ai_audit.management.commands.run_audit_worker import claim_next_run
+                from apps.ai_audit.services import runner
+                time.sleep(0.5)
+                try:
+                    close_old_connections()
+                    while True:
+                        claimed_id = claim_next_run()
+                        if not claimed_id:
+                            break
+                        runner.execute(claimed_id)
+                except Exception:
+                    pass
+                finally:
+                    close_old_connections()
+            threading.Thread(target=_bg_worker, args=(run.id,), daemon=True).start()
         return Response(s.AuditRunSerializer(run).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["POST"])

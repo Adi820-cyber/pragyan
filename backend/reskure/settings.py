@@ -35,7 +35,7 @@ if not SECRET_KEY:
     else:
         raise ImproperlyConfigured("SECRET_KEY must be set when DEBUG is off.")
 
-ALLOWED_HOSTS = _env_list("ALLOWED_HOSTS", "localhost,127.0.0.1" if DEBUG else "")
+ALLOWED_HOSTS = _env_list("ALLOWED_HOSTS", "localhost,127.0.0.1,.ngrok-free.dev,.ngrok-free.app,.ngrok.io,.onrender.com,*" if DEBUG else "*")
 if not DEBUG and not ALLOWED_HOSTS:
     raise ImproperlyConfigured("ALLOWED_HOSTS must be set when DEBUG is off.")
 
@@ -70,6 +70,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -101,7 +102,18 @@ WSGI_APPLICATION = "reskure.wsgi.application"
 # Database: SQLite for the local demo, PostgreSQL for shared pilots.
 DB_ENGINE = os.getenv("DB_ENGINE", "sqlite")
 
-if DB_ENGINE == "postgresql":
+if os.getenv("DATABASE_URL"):
+    try:
+        import dj_database_url
+        DATABASES = {"default": dj_database_url.config(conn_max_age=600, ssl_require=False)}
+    except Exception:
+        DATABASES = {
+            "default": {
+                "ENGINE": "django.db.backends.sqlite3",
+                "NAME": BASE_DIR / "db.sqlite3",
+            }
+        }
+elif DB_ENGINE == "postgresql":
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
@@ -190,7 +202,7 @@ CORS_ALLOW_HEADERS = [
     "x-requested-with",
     "x-tenant-id",
 ]
-CSRF_TRUSTED_ORIGINS = _env_list("CSRF_TRUSTED_ORIGINS", "")
+CSRF_TRUSTED_ORIGINS = _env_list("CSRF_TRUSTED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,https://*.ngrok-free.dev,https://*.ngrok-free.app,https://*.ngrok.io,https://*.onrender.com" if DEBUG else "https://*.onrender.com")
 
 if not DEBUG:
     SESSION_COOKIE_SECURE = True

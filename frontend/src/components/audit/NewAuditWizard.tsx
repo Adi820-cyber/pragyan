@@ -236,7 +236,7 @@ export function NewAuditWizard({
               </select>
             </Field>
             {!ready && <p className="text-xs text-amber-200">You need at least one model version and one reference dataset. Add them on the system page.</p>}
-            <button type="button" disabled={!ready} onClick={() => { if (!favourable && version) setFavourable(version.favourable_label); setStep(1); }} className={buttonClass}>Continue</button>
+            <button type="button" disabled={!ready} onClick={() => { if (!favourable && version) setFavourable(version.favourable_label); if (ref?.suggested_config && (isLlm ? !llmCols.output : !prediction)) applySample(); setStep(1); }} className={buttonClass}>Continue</button>
           </>
         )}
 
@@ -244,8 +244,12 @@ export function NewAuditWizard({
           <>
             {ref.suggested_config && (
               <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
-                <p className="text-xs text-amber-100">This is the synthetic sample, so the column mapping can be filled in for you.</p>
-                <button type="button" onClick={applySample} className={ghostButtonClass}>Use sample mapping</button>
+                <p className="text-xs text-amber-100">
+                  {ref.is_real_data
+                    ? "This is a built-in public dataset example, so the recommended column mapping has been pre-filled for you."
+                    : "This is the built-in synthetic sample, so the recommended column mapping has been pre-filled for you."}
+                </p>
+                <button type="button" onClick={applySample} className={ghostButtonClass}>Reset sample mapping</button>
               </div>
             )}
             {isLlm ? (

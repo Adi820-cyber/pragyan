@@ -69,8 +69,8 @@ class CisoControlsView(_CisoView):
 
 class CisoCrosswalkView(_CisoView):
     def get(self, request):
-        _tenant_id(request)
-        matrix = get_crosswalk_table()
+        tid = _tenant_id(request)
+        matrix = get_crosswalk_table(tid)
         return Response({"count": len(matrix), "crosswalks": matrix})
 
 

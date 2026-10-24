@@ -294,6 +294,8 @@ export interface Finding {
   owner_name: string | null;
   due_date: string | null;
   remediation_note: string;
+  submitted_by?: string | null;
+  submitted_by_name?: string | null;
   reviewed_by_name: string | null;
   reviewed_at: string | null;
   review_comment: string;

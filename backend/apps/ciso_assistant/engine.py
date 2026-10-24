@@ -8,8 +8,8 @@ from apps.ciso_assistant.catalog import (
 )
 
 VALID_STATUSES = ("NOT_STARTED", "IN_PROGRESS", "IMPLEMENTED")
-RISK_CATEGORIES = ("CYBERSECURITY", "PRIVACY", "COMPLIANCE", "OPERATIONAL", "THIRD_PARTY", "AI")
-RISK_STATUSES = ("IDENTIFIED", "ASSESSED", "TREATING", "ACCEPTED", "CLOSED")
+RISK_CATEGORIES = ("CYBERSECURITY", "PRIVACY", "DATA_PRIVACY", "COMPLIANCE", "OPERATIONAL", "THIRD_PARTY", "AI")
+RISK_STATUSES = ("IDENTIFIED", "ASSESSED", "TREATING", "RESIDUAL_MONITORING", "MITIGATION_PLANNED", "ACCEPTED", "CLOSED")
 TREATMENTS = ("MITIGATE", "ACCEPT", "TRANSFER", "AVOID")
 
 
@@ -52,6 +52,7 @@ def reset_tenant_state(tenant_id: str) -> bool:
 
 def has_stored_state(tenant_id: str) -> bool:
     return _state(tenant_id) is not None
+
 
 def get_ciso_overview(tenant_id: str) -> Dict[str, Any]:
     """
@@ -145,7 +146,7 @@ def get_ciso_overview(tenant_id: str) -> Dict[str, Any]:
         "inherent_matrix_5x5": inherent_matrix,
         "residual_matrix_5x5": residual_matrix,
         "recent_risks": risks[:4],
-        "applied_core_controls": APPLIED_CORE_CONTROLS,
+        "applied_core_controls": get_crosswalk_table(tenant_id),
     }
 
 
@@ -168,7 +169,7 @@ def update_control_status(
     equivalent controls across other frameworks sharing the same crosswalk_tag!
     """
     if new_status not in VALID_STATUSES:
-        raise CisoValidationError(f"status must be one of {", ".join(VALID_STATUSES)}.")
+        raise CisoValidationError(f"status must be one of {', '.join(VALID_STATUSES)}.")
     controls = _get_controls_for_tenant(tenant_id)
     target_control = next((c for c in controls if c["code"] == control_code), None)
     if not target_control:
@@ -196,12 +197,27 @@ def update_control_status(
     }
 
 
-def get_crosswalk_table() -> List[Dict[str, Any]]:
+def get_crosswalk_table(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Returns the decoupled crosswalk matrix showing how each technical safeguard
     satisfies requirements across ISO 27001, NIST CSF, SOC 2, CIS Controls, DPDP, and ISO 42001.
+    Syncs implementation_status dynamically when tenant_id is supplied.
     """
-    return APPLIED_CORE_CONTROLS
+    table = copy.deepcopy(APPLIED_CORE_CONTROLS)
+    if not tenant_id:
+        return table
+    controls = _get_controls_for_tenant(tenant_id)
+    for row in table:
+        mapped = [c for c in controls if c.get("crosswalk_tag") == row["tag"]]
+        if mapped:
+            statuses = {c["status"] for c in mapped}
+            if statuses == {"IMPLEMENTED"}:
+                row["implementation_status"] = "IMPLEMENTED"
+            elif statuses == {"NOT_STARTED"}:
+                row["implementation_status"] = "NOT_STARTED"
+            else:
+                row["implementation_status"] = "IN_PROGRESS"
+    return table
 
 
 def get_gap_analysis(tenant_id: str) -> List[Dict[str, Any]]:
@@ -298,7 +314,7 @@ def add_custom_risk(tenant_id: str, risk_data: Dict[str, Any]) -> Dict[str, Any]
         "residual_severity": _severity(rl * ri),
         "treatment_strategy": _choice(risk_data, "treatment_strategy", TREATMENTS, "MITIGATE"),
         "treatment_plan": _text(risk_data, "treatment_plan", 2000),
-        "mitigating_control": _text(risk_data, "mitigating_control", 80),
+        "mitigating_control": _text(risk_data, "mitigating_control", 80) or "CTRL-IAM-MFA",
     }
     risks.insert(0, new_risk)
     _save(tenant_id, controls, risks)

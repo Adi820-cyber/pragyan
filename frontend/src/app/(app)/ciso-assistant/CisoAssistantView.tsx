@@ -254,7 +254,7 @@ export function CisoAssistantView() {
   }, [risks, filterSeverity]);
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-6">
+    <div className="space-y-6">
       {/* CISO Assistant Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-white/10">
         <div>
@@ -279,7 +279,25 @@ export function CisoAssistantView() {
 
         <div className="flex items-center gap-3">
           <button
-            onClick={() => setShowAddRiskModal(true)}
+            type="button"
+            onClick={async () => {
+              setActionError(null);
+              try {
+                await call("POST", "ciso/seed/", {});
+                await reload();
+                setCrosswalkNotification("Reset CISO Assistant controls and risk register to baseline.");
+                setTimeout(() => setCrosswalkNotification(null), 4000);
+              } catch (err) {
+                setActionError(err instanceof Error ? err.message : "Could not reset baseline.");
+              }
+            }}
+            className="inline-flex items-center gap-2 border border-white/15 hover:bg-white/5 text-slate-200 font-medium text-xs px-3 py-2 rounded-lg transition-all"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Reset Baseline</span>
+          </button>
+          <button
+            onClick={() => { setActionError(null); setShowAddRiskModal(true); }}
             className="inline-flex items-center gap-2 bg-gradient-to-r from-cyan-600 to-sky-600 hover:from-cyan-500 hover:to-sky-500 text-white font-semibold text-xs px-4 py-2 rounded-lg shadow-lg shadow-cyan-900/30 transition-all"
           >
             <Plus className="w-3.5 h-3.5" />
@@ -401,11 +419,13 @@ export function CisoAssistantView() {
                 <ShieldAlert className="w-4 h-4 text-rose-400" />
               </div>
               <div className="my-2 flex items-baseline gap-2">
-                <span className="text-3xl font-extrabold text-white">0</span>
+                <span className="text-3xl font-extrabold text-white">
+                  {risks.filter((r) => r.residual_severity === "CRITICAL").length}
+                </span>
                 <span className="text-xs text-slate-400">Residual Criticals</span>
               </div>
               <div className="text-[11px] text-slate-400">
-                2 Inherent Critical risks successfully mitigated to Low/Medium
+                {risks.filter((r) => r.inherent_severity === "CRITICAL").length} Inherent Critical risks tracked in register
               </div>
             </div>
 
@@ -917,6 +937,8 @@ export function CisoAssistantView() {
                     <option value="COMPLIANCE">Compliance</option>
                     <option value="DATA_PRIVACY">Data Privacy</option>
                     <option value="OPERATIONAL">Operational</option>
+                    <option value="AI">AI & Model Governance</option>
+                    <option value="THIRD_PARTY">Third-Party / Vendor</option>
                   </select>
                 </div>
 
@@ -972,6 +994,11 @@ export function CisoAssistantView() {
                 />
               </div>
 
+              {actionError && (
+                <div role="alert" className="p-2.5 rounded-lg border border-rose-500/40 bg-rose-950/50 text-rose-200 text-xs">
+                  {actionError}
+                </div>
+              )}
               <div className="flex items-center justify-end gap-3 pt-2">
                 <button
                   type="button"

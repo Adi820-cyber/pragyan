@@ -6,6 +6,27 @@ const ALLOWED_PREFIXES = ["ai/", "auth/me", "network/", "ciso/", "cloud-security
 const WRITE_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
 const PASS_HEADERS = ["content-type", "content-disposition", "content-security-policy", "x-content-type-options"];
 
+function isSameOriginWrite(request: NextRequest): boolean {
+  const origin = request.headers.get("origin");
+  if (!origin) return true;
+  let originHost: string;
+  try {
+    originHost = new URL(origin).host.toLowerCase();
+  } catch {
+    return false;
+  }
+  const candidates = new Set<string>([request.nextUrl.host.toLowerCase()]);
+  for (const h of [request.headers.get("x-forwarded-host"), request.headers.get("host")]) {
+    if (h) {
+      for (const part of h.split(",")) {
+        const trimmed = part.trim().toLowerCase();
+        if (trimmed) candidates.add(trimmed);
+      }
+    }
+  }
+  return candidates.has(originHost);
+}
+
 async function forward(request: NextRequest, ctx: RouteContext<"/api/proxy/[...path]">) {
   const { path } = await ctx.params;
   const joined = path.join("/");
@@ -20,12 +41,9 @@ async function forward(request: NextRequest, ctx: RouteContext<"/api/proxy/[...p
   const session = await readSession();
   if (!session) return Response.json({ detail: "Not signed in." }, { status: 401 });
 
-  // Cookies are SameSite=Lax; also require a same-origin Origin header on writes.
-  if (WRITE_METHODS.has(request.method)) {
-    const origin = request.headers.get("origin");
-    if (!origin || new URL(origin).host !== request.nextUrl.host) {
-      return Response.json({ detail: "Cross-origin request rejected." }, { status: 403 });
-    }
+  // Cookies are SameSite=Lax; also require a matching Origin/Host header on writes (including behind ngrok).
+  if (WRITE_METHODS.has(request.method) && !isSameOriginWrite(request)) {
+    return Response.json({ detail: "Cross-origin request rejected." }, { status: 403 });
   }
 
   const url = `${API_BASE}/${joined}${joined.endsWith("/") ? "" : "/"}${request.nextUrl.search}`;
