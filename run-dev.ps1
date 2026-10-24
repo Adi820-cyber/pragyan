@@ -55,6 +55,9 @@ if (-not $SkipSeed) {
   $seedArgs = "run python manage.py seed_ai_demo --password `"$DemoPassword`""
   if ($Offline) { $seedArgs += " --offline" }
   Run "uv" $seedArgs $backend (Join-Path $runDir "seed.log")
+  # Named team for the multi-user findings story, then the control, vendor and data-request registers.
+  Run "uv" "run python manage.py seed_demo_team --password `"$DemoPassword`"" $backend (Join-Path $runDir "seed-team.log")
+  Run "uv" "run python manage.py seed_demo_controls" $backend (Join-Path $runDir "seed-controls.log")
 }
 
 Step "Frontend dependencies"
@@ -95,6 +98,9 @@ try {
     Write-Host "  Login    admin@hirelens.example   (tenant admin)"
     Write-Host "           founder@hirelens.example (risk owner)"
     Write-Host "           advisor@hirelens.example (compliance officer)"
+    Write-Host "           priya.nair@hirelens.example  (compliance officer: assigns, approves)"
+    Write-Host "           rohan.mehta@hirelens.example (risk owner: fixes)"
+    Write-Host "           ananya.iyer@hirelens.example (auditor: reads, comments)"
     Write-Host "  Password $DemoPassword"
   }
   Write-Host "`nPress Ctrl+C to stop everything."

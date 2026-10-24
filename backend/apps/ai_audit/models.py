@@ -287,6 +287,7 @@ class ControlAssessment(TenantScopedModel):
     reviewer = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="reviewed_controls")
     reviewed_at = models.DateTimeField(null=True, blank=True)
     review_comment = models.TextField(blank=True)
+    owner = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="owned_ai_controls")
     updated_by = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="updated_controls")
 
     class Meta:
@@ -324,6 +325,7 @@ class Dependency(TenantScopedModel):
     ]
     TRAINING_CHOICES = [("yes", "Yes"), ("no", "No"), ("unknown", "Unknown")]
     CRITICALITY_CHOICES = [("low", "Low"), ("medium", "Medium"), ("high", "High")]
+    RELATIONSHIP_CHOICES = [("processor", "Processor"), ("sub_processor", "Sub-processor"), ("joint_controller", "Joint controller"), ("other", "Other")]
 
     system = models.ForeignKey(AISystem, on_delete=models.CASCADE, related_name="dependencies")
     name = models.CharField(max_length=200)
@@ -342,6 +344,8 @@ class Dependency(TenantScopedModel):
     subprocessors_listed = models.BooleanField(default=False)
     exit_plan = models.BooleanField(default=False)
     criticality = models.CharField(max_length=10, choices=CRITICALITY_CHOICES, default="medium")
+    relationship = models.CharField(max_length=20, choices=RELATIONSHIP_CHOICES, default="processor")
+    is_demo = models.BooleanField(default=False, help_text="Synthetic demonstration record.")
     last_reviewed = models.DateField(null=True, blank=True)
     notes = models.TextField(blank=True)
 
@@ -422,3 +426,53 @@ class ReportEvent(TenantScopedModel):
     class Meta:
         db_table = "ai_report_event"
         ordering = ["created_at"]
+
+
+class ControlAssessmentEvent(TenantScopedModel):
+    """Append-only history of what happened to a control assessment."""
+    assessment = models.ForeignKey(ControlAssessment, on_delete=models.CASCADE, related_name="events")
+    kind = models.CharField(max_length=30)
+    from_state = models.CharField(max_length=30, blank=True)
+    to_state = models.CharField(max_length=30, blank=True)
+    note = models.TextField(blank=True)
+    actor = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+
+    class Meta:
+        db_table = "ai_control_event"
+        ordering = ["-created_at"]
+
+
+class ControlLink(TenantScopedModel):
+    """A link to evidence that lives elsewhere (policy page, ticket, wiki). Manual attestation, not verified."""
+    assessment = models.ForeignKey(ControlAssessment, on_delete=models.CASCADE, related_name="links")
+    title = models.CharField(max_length=200)
+    url = models.URLField(max_length=500)
+    added_by = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+
+    class Meta:
+        db_table = "ai_control_link"
+        ordering = ["-created_at"]
+
+
+class DataSubjectRequest(TenantScopedModel):
+    """One request from a person exercising a right. The requester is a reference, not a name or contact."""
+    KIND_CHOICES = RightsProcess.RIGHT_CHOICES + [("consent", "Consent query or record")]
+    STATUS_CHOICES = [
+        ("received", "Received"), ("in_progress", "In progress"), ("completed", "Completed"),
+        ("rejected", "Rejected with reasons"),
+    ]
+    system = models.ForeignKey(AISystem, on_delete=models.CASCADE, related_name="subject_requests")
+    reference = models.CharField(max_length=60, help_text="Internal ticket or pseudonymous reference. No names or contact details.")
+    kind = models.CharField(max_length=30, choices=KIND_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="received")
+    received_on = models.DateField()
+    due_on = models.DateField()
+    closed_on = models.DateField(null=True, blank=True)
+    assignee = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="assigned_subject_requests")
+    notes = models.TextField(blank=True)
+    is_demo = models.BooleanField(default=False, help_text="Synthetic demonstration record.")
+
+    class Meta:
+        db_table = "ai_subject_request"
+        ordering = ["due_on", "-created_at"]
+        constraints = [models.UniqueConstraint(fields=["tenant", "reference"], name="unique_subject_request_reference")]

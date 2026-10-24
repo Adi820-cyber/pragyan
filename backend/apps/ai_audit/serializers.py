@@ -238,22 +238,86 @@ class ControlEvidenceSerializer(serializers.ModelSerializer):
         return _name(obj.uploaded_by)
 
 
+class ControlLinkSerializer(serializers.ModelSerializer):
+    added_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = m.ControlLink
+        fields = ["id", "assessment", "title", "url", "added_by_name", "created_at"]
+        read_only_fields = fields
+
+    def get_added_by_name(self, obj):
+        return _name(obj.added_by)
+
+
+class ControlEventSerializer(serializers.ModelSerializer):
+    actor_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = m.ControlAssessmentEvent
+        fields = ["id", "kind", "from_state", "to_state", "note", "actor_name", "created_at"]
+        read_only_fields = fields
+
+    def get_actor_name(self, obj):
+        return _name(obj.actor)
+
+
 class ControlAssessmentSerializer(TenantBoundSerializer):
     reviewer_name = serializers.SerializerMethodField()
+    owner_name = serializers.SerializerMethodField()
     evidence_files = ControlEvidenceSerializer(many=True, read_only=True)
+    links = ControlLinkSerializer(many=True, read_only=True)
     control = serializers.SerializerMethodField()
+    history = serializers.SerializerMethodField()
+    automated = serializers.SerializerMethodField()
+    basis = serializers.SerializerMethodField()
+    gaps = serializers.SerializerMethodField()
+    last_assessed = serializers.SerializerMethodField()
 
     class Meta:
         model = m.ControlAssessment
         fields = [
             "id", "system", "pack_id", "pack_version", "control_id", "control", "applicable", "applicability_rationale",
-            "state", "owner_note", "reviewer_name", "reviewed_at", "review_comment", "evidence_files", "updated_at",
+            "state", "owner_note", "owner", "owner_name", "reviewer_name", "reviewed_at", "review_comment", "evidence_files",
+            "links", "history", "automated", "basis", "gaps", "last_assessed", "updated_at",
         ]
         read_only_fields = ["id", "system", "pack_id", "pack_version", "control_id", "state", "reviewed_at",
                             "review_comment", "updated_at"]
 
     def get_reviewer_name(self, obj):
         return _name(obj.reviewer)
+
+    def get_owner_name(self, obj):
+        return _name(obj.owner)
+
+    def _auto(self, obj):
+        from apps.ai_audit.services.controls import automated_evidence_for_system
+
+        cache = self.context.setdefault("_auto_cache", {})
+        if obj.system_id not in cache:
+            cache[obj.system_id] = automated_evidence_for_system(obj.system)
+        return cache[obj.system_id].get(obj.control_id) if obj.applicable else None
+
+    def get_history(self, obj):
+        return ControlEventSerializer(obj.events.select_related("actor").all()[:20], many=True).data
+
+    def get_automated(self, obj):
+        return self._auto(obj)
+
+    def get_basis(self, obj):
+        from apps.ai_audit.services.controls import evidence_basis
+
+        return evidence_basis(obj, self._auto(obj), len(obj.links.all()) > 0) if obj.applicable else "none"
+
+    def get_gaps(self, obj):
+        from apps.ai_audit.services.controls import get_control, gaps_for
+
+        return gaps_for(obj, get_control(obj.pack_id, obj.control_id), self._auto(obj), len(obj.links.all()) > 0)
+
+    def get_last_assessed(self, obj):
+        latest = obj.events.first()
+        stamps = [x for x in (obj.reviewed_at, latest.created_at if latest else None) if x]
+        return max(stamps) if stamps else None
 
     def get_control(self, obj):
         from apps.ai_audit.services.controls import get_control
@@ -273,9 +337,33 @@ class DependencySerializer(TenantBoundSerializer):
         fields = [
             "id", "system", "name", "service", "role", "personal_data_shared", "data_categories", "region", "outside_india",
             "outside_eea", "transfer_mechanism", "contract_in_place", "contract_reviewed_on", "trains_on_customer_data",
-            "retention_days", "subprocessors_listed", "exit_plan", "criticality", "last_reviewed", "notes", "created_at",
+            "retention_days", "subprocessors_listed", "exit_plan", "criticality", "relationship", "is_demo", "last_reviewed",
+            "notes", "risk", "gaps", "system_name", "created_at",
         ]
-        read_only_fields = ["id", "created_at"]
+        read_only_fields = ["id", "is_demo", "created_at"]
+
+    risk = serializers.SerializerMethodField()
+    gaps = serializers.SerializerMethodField()
+    system_name = serializers.CharField(source="system.name", read_only=True)
+
+    def _assess(self, obj):
+        from apps.ai_audit.services import governance
+
+        jurisdictions = obj.system.jurisdictions or []
+        rows = [r for r in governance.run_vendor_checks([governance.dependency_dict(obj)], jurisdictions) if r.check_key == "vendor_dependency"]
+        return rows[0] if rows else None
+
+    def get_risk(self, obj):
+        r = self._assess(obj)
+        if r is None:
+            return "unknown"
+        if r.state == "review_required":
+            return "high" if r.detail.get("high_severity") else "medium"
+        return "unknown" if r.state == "insufficient_evidence" else "low"
+
+    def get_gaps(self, obj):
+        r = self._assess(obj)
+        return (r.detail.get("gaps", []) + [f"Not recorded: {x}" for x in r.detail.get("not_recorded", [])]) if r else []
 
     def validate_data_categories(self, value):
         if not isinstance(value, list) or not all(isinstance(v, str) and len(v) <= 100 for v in value):
@@ -367,3 +455,54 @@ class AuditReportDetailSerializer(AuditReportSerializer):
 
     def get_regulatory_mapping(self, obj):
         return obj.snapshot.get("regulatory_mapping")
+
+
+class DataSubjectRequestSerializer(TenantBoundSerializer):
+    kind_label = serializers.CharField(source="get_kind_display", read_only=True)
+    assignee_name = serializers.SerializerMethodField()
+    system_name = serializers.CharField(source="system.name", read_only=True)
+    overdue = serializers.SerializerMethodField()
+    days_left = serializers.SerializerMethodField()
+    due_on = serializers.DateField(required=False)
+
+    class Meta:
+        model = m.DataSubjectRequest
+        fields = [
+            "id", "system", "system_name", "reference", "kind", "kind_label", "status", "received_on", "due_on", "closed_on",
+            "assignee", "assignee_name", "notes", "is_demo", "overdue", "days_left", "created_at",
+        ]
+        read_only_fields = ["id", "closed_on", "is_demo", "created_at"]
+
+    def get_assignee_name(self, obj):
+        return _name(obj.assignee)
+
+    def get_overdue(self, obj):
+        from datetime import date
+
+        if obj.status in ("completed", "rejected"):
+            return bool(obj.closed_on and obj.closed_on > obj.due_on)
+        return obj.due_on < date.today()
+
+    def get_days_left(self, obj):
+        from datetime import date
+
+        return None if obj.status in ("completed", "rejected") else (obj.due_on - date.today()).days
+
+    def validate_reference(self, value):
+        value = value.strip()
+        if "@" in value:
+            raise serializers.ValidationError("Use a ticket or pseudonymous reference, not an email address.")
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        system = attrs.get("system") or getattr(self.instance, "system", None)
+        received = attrs.get("received_on") or getattr(self.instance, "received_on", None)
+        if received and not attrs.get("due_on") and not self.instance:
+            from datetime import timedelta
+            from apps.ai_audit.services.controls import sla_days_for
+
+            attrs["due_on"] = received + timedelta(days=sla_days_for(system, attrs.get("kind")))
+        if received and attrs.get("due_on") and attrs["due_on"] < received:
+            raise serializers.ValidationError({"due_on": "The due date cannot be before the date received."})
+        return attrs
