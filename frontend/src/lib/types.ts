@@ -592,3 +592,74 @@ export interface CloudSecurityOverview {
   }[];
 }
 
+
+export type ReportStatus = "draft" | "in_review" | "approved";
+
+export interface ReportVerdict {
+  level: "attention" | "no_alert" | "incomplete";
+  headline: string;
+  text: string;
+}
+
+export interface ReportEvent {
+  id: string;
+  action: string;
+  from_status: string;
+  to_status: string;
+  comment: string;
+  actor_name: string;
+  created_at: string;
+}
+
+export interface AuditReportRow {
+  id: string;
+  run: string;
+  system: string;
+  system_name: string;
+  model_version_label: string;
+  generated_by: string | null;
+  submitted_by: string | null;
+  version: number;
+  status: ReportStatus;
+  status_label: string;
+  audit_date: string | null;
+  fingerprint: string;
+  generated_by_name: string | null;
+  submitted_by_name: string | null;
+  submitted_at: string | null;
+  approved_by_name: string | null;
+  approved_at: string | null;
+  review_comment: string;
+  created_at: string;
+  verdict: ReportVerdict | null;
+}
+
+export interface ExecutiveSummary {
+  verdict: ReportVerdict;
+  top_risks: { title: string; severity: string | null; why: string; next_step: string }[];
+  failed: { category: string; check: string; subject: string; value: number | null; threshold: number | null; support_n: number | null; why: string }[];
+  not_tested: string[];
+  categories: { key: string; label: string; status: string; status_label: string; count_text: string; headline: string }[];
+  governance: Record<string, number>;
+  counts: Record<string, number>;
+}
+
+export interface RegulatoryMapping {
+  notice: string;
+  areas: { key: string; label: string; coverage: string; dpdp: string; gdpr: string }[];
+  controls: Record<"DPDP" | "GDPR", { control_id: string; title: string; source: string; state: string; status_text: string; evidence_count: number; applicable: boolean }[]>;
+}
+
+export interface AuditReportDetail extends AuditReportRow {
+  events: ReportEvent[];
+  executive_summary: ExecutiveSummary | null;
+  regulatory_mapping: RegulatoryMapping | null;
+}
+
+export interface ReportVerification {
+  valid: boolean;
+  snapshot_matches: boolean;
+  source_results_match: boolean;
+  fingerprint: string;
+  checked_at: string;
+}

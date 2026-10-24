@@ -3,7 +3,7 @@ import json
 from datetime import date
 
 from django.conf import settings
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.core.files.base import ContentFile
 from django.http import FileResponse, Http404, HttpResponse
 from django.utils import timezone
@@ -619,3 +619,116 @@ class DemoSeedView(APIView):
         except RealDataUnavailable as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         return Response({"system": str(system.id), "name": system.name}, status=status.HTTP_201_CREATED)
+
+# ------------------------------------------------------------------ reports (frozen, versioned, signed off)
+class AuditReportViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.CreateModelMixin, viewsets.GenericViewSet):
+    """Generate a report from a completed run, submit it, and have a different person approve it."""
+
+    queryset = m.AuditReport.objects.select_related(
+        "system", "run", "run__model_version", "generated_by", "submitted_by", "approved_by").prefetch_related("events__actor").all()
+    serializer_class = s.AuditReportSerializer
+    http_method_names = ["get", "post", "head", "options"]
+
+    def get_serializer_class(self):
+        return s.AuditReportDetailSerializer if self.action == "retrieve" else s.AuditReportSerializer
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        p = self.request.query_params
+        for param, field in (("system", "system_id"), ("run", "run_id"), ("status", "status")):
+            if p.get(param):
+                qs = qs.filter(**{field: p[param]})
+        return qs
+
+    def create(self, request, *args, **kwargs):
+        membership = _membership(request)
+        run = _scoped(m.AuditRun, request, request.data.get("run"))
+        if run.status != "completed":
+            raise ValidationError({"run": f"The run is {run.status}; a report can only be generated from a completed audit."})
+        if m.AuditReport.all_objects.filter(run=run, status__in=["draft", "in_review"]).exists():
+            return Response({"detail": "This audit already has a report in draft or review. Finish or approve it first."},
+                            status=status.HTTP_409_CONFLICT)
+        snapshot, fingerprint = report_service.freeze_report(run)
+        try:
+            with transaction.atomic():
+                last = m.AuditReport.all_objects.filter(system=run.system).order_by("-version").values_list("version", flat=True).first()
+                report = m.AuditReport.all_objects.create(
+                    tenant_id=membership.tenant_id, run=run, system=run.system, version=(last or 0) + 1,
+                    snapshot=snapshot, fingerprint=fingerprint, generated_by=membership)
+                m.ReportEvent.all_objects.create(
+                    tenant_id=membership.tenant_id, report=report, actor=membership, action="generate", to_status="draft",
+                    comment=f"Frozen from run {run.id}. Fingerprint {fingerprint[:12]}.")
+        except IntegrityError:
+            return Response({"detail": "Another report was generated at the same time. Try again."}, status=status.HTTP_409_CONFLICT)
+        return Response(s.AuditReportDetailSerializer(self._fresh(report)).data, status=status.HTTP_201_CREATED)
+
+    @staticmethod
+    def _fresh(report):
+        return AuditReportViewSet.queryset.model.all_objects.select_related(
+            "system", "run", "run__model_version", "generated_by", "submitted_by", "approved_by").get(id=report.id)
+
+    def _move(self, request, report, to, allowed_from, action_name, permission, comment_required=False, sod=False):
+        membership = _membership(request)
+        _require(request, permission, resource=report)
+        comment = (request.data.get("comment") or "").strip()
+        if comment_required and not comment:
+            raise ValidationError({"comment": "A comment is required."})
+        if sod and membership.id in (report.generated_by_id, report.submitted_by_id):
+            raise PermissionDenied("Segregation of duties: the person who generated or submitted a report cannot approve or return it.")
+        fields = {"status": to, "updated_at": timezone.now()}
+        if action_name == "submit":
+            fields.update(submitted_by=membership, submitted_at=timezone.now(), review_comment="")
+        elif action_name == "approve":
+            fields.update(approved_by=membership, approved_at=timezone.now(), review_comment=comment)
+        elif action_name == "request_changes":
+            fields.update(review_comment=comment, submitted_by=None, submitted_at=None)
+        with transaction.atomic():
+            moved = m.AuditReport.all_objects.filter(id=report.id, status__in=allowed_from).update(**fields)
+            if not moved:
+                raise ValidationError({"detail": f"A report that is '{report.status}' cannot move to '{to}'."})
+            m.ReportEvent.all_objects.create(
+                tenant_id=membership.tenant_id, report=report, actor=membership, action=action_name,
+                from_status=report.status, to_status=to, comment=comment)
+        return Response(s.AuditReportDetailSerializer(self._fresh(report)).data)
+
+    @action(detail=True, methods=["POST"])
+    def submit(self, request, pk=None):
+        return self._move(request, self.get_object(), "in_review", ["draft"], "submit", "ai.update")
+
+    @action(detail=True, methods=["POST"])
+    def approve(self, request, pk=None):
+        return self._move(request, self.get_object(), "approved", ["in_review"], "approve", "ai.review", sod=True)
+
+    @action(detail=True, methods=["POST"], url_path="request-changes")
+    def request_changes(self, request, pk=None):
+        return self._move(request, self.get_object(), "draft", ["in_review"], "request_changes", "ai.review",
+                          comment_required=True, sod=True)
+
+    @action(detail=True, methods=["GET"])
+    def verify(self, request, pk=None):
+        """Recompute the fingerprint and compare with the measurements. Read-only."""
+        return Response(report_service.verify_report(self.get_object()))
+
+    def _people(self, report):
+        return {"generated_by": s._name(report.generated_by), "submitted_by": s._name(report.submitted_by),
+                "approved_by": s._name(report.approved_by)}
+
+    @action(detail=True, methods=["GET"])
+    def html(self, request, pk=None):
+        report = self.get_object()
+        html = report_service.render_html(report.snapshot, report_service.workflow_block(report, self._people(report)))
+        response = HttpResponse(html, content_type="text/html; charset=utf-8")
+        if request.query_params.get("download"):
+            response["Content-Disposition"] = f'attachment; filename="audit-report-v{report.version}.html"'
+        response["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
+
+    @action(detail=True, methods=["GET"])
+    def markdown(self, request, pk=None):
+        report = self.get_object()
+        text = report_service.render_markdown(report.snapshot, report_service.workflow_block(report, self._people(report)))
+        response = HttpResponse(text, content_type="text/markdown; charset=utf-8")
+        response["Content-Disposition"] = f'attachment; filename="audit-report-v{report.version}.md"'
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
