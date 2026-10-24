@@ -172,17 +172,40 @@ class FindingSerializer(TenantBoundSerializer):
     system_name = serializers.CharField(source="system.name", read_only=True)
     history = serializers.SerializerMethodField()
     result_ids = serializers.SerializerMethodField()
+    assigned_by_name = serializers.SerializerMethodField()
+    submitted_by_name = serializers.SerializerMethodField()
+    attachments = serializers.SerializerMethodField()
+    is_overdue = serializers.SerializerMethodField()
 
     class Meta:
         model = m.Finding
         fields = [
             "id", "system", "system_name", "run", "category", "title", "plain_language", "next_step", "severity",
-            "status", "owner", "owner_name", "due_date", "remediation_note", "reviewed_by_name", "reviewed_at",
-            "review_comment", "history", "result_ids", "created_at",
+            "status", "owner", "owner_name", "due_date", "priority", "assigned_by_name", "assigned_at",
+            "submitted_by", "submitted_by_name", "is_overdue", "remediation_note", "reviewed_by_name", "reviewed_at",
+            "review_comment", "attachments", "history", "result_ids", "created_at",
         ]
         read_only_fields = [
             "id", "system", "run", "category", "title", "plain_language", "next_step", "severity", "status",
-            "reviewed_at", "review_comment", "created_at",
+            "priority", "assigned_at", "submitted_by", "reviewed_at", "review_comment", "created_at",
+        ]
+
+    def get_assigned_by_name(self, obj):
+        return _name(obj.assigned_by)
+
+    def get_submitted_by_name(self, obj):
+        return _name(obj.submitted_by)
+
+    def get_is_overdue(self, obj):
+        from datetime import date
+
+        return bool(obj.due_date and obj.due_date < date.today() and obj.status not in ("accepted", "resolved"))
+
+    def get_attachments(self, obj):
+        return [
+            {"id": str(a.id), "kind": a.kind, "title": a.title, "url": a.url or None, "filename": a.original_filename,
+             "size_bytes": a.size_bytes, "sha256": a.sha256, "by": _name(a.uploaded_by), "at": a.created_at}
+            for a in obj.attachments.select_related("uploaded_by")
         ]
 
     def get_owner_name(self, obj):

@@ -173,6 +173,11 @@ class PolicyEngine:
         fallback_role_map["COMPLIANCE_OFFICER"].append("ai.")
         fallback_role_map["RISK_OWNER"] += ["ai.read", "ai.create", "ai.update"]
         fallback_role_map["AUDITOR"].append("ai.read")
+        # Findings workflow: assigning ("ai.assign") and reviewing ("ai.review") stay with COMPLIANCE_OFFICER
+        # ("ai." prefix) and TENANT_ADMIN. Everyone with a role may comment; only RISK_OWNER may work an item
+        # (ai.update). AUDITOR and CONTRIBUTOR can read and comment, nothing more.
+        for _role in ("RISK_OWNER", "AUDITOR", "CONTRIBUTOR"):
+            fallback_role_map[_role].append("ai.comment")
         # Network topology: everyone with a role may look and trace; editing is for reviewers and administrators.
         fallback_role_map["COMPLIANCE_OFFICER"].append("network.")
         for _role in ("RISK_OWNER", "AUDITOR", "CONTRIBUTOR"):

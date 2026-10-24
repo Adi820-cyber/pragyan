@@ -19,6 +19,10 @@ def evidence_upload_path(instance, filename: str) -> str:
     return f"control_evidence/{instance.tenant_id}/{uuid.uuid4().hex}.bin"
 
 
+def finding_evidence_upload_path(instance, filename: str) -> str:
+    return f"finding_evidence/{instance.tenant_id}/{uuid.uuid4().hex}.bin"
+
+
 def sha256_of_uploaded(uploaded_file) -> str:
     digest = hashlib.sha256()
     for chunk in uploaded_file.chunks():

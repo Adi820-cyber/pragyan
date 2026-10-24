@@ -1,14 +1,20 @@
 import hashlib
 import json
+import uuid
 from datetime import date
 
 from django.conf import settings
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.validators import URLValidator
+from django.db.models import Count
 from django.db import transaction
 from django.core.files.base import ContentFile
 from django.http import FileResponse, Http404, HttpResponse
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -30,6 +36,7 @@ from apps.ai_audit.services.validation import (
 from apps.ai_audit.storage import sha256_of_uploaded
 from apps.authorization.engine import PolicyEngine
 from apps.authorization.permissions import HasReskurePermission
+from apps.core.models import Membership
 
 MAX_ACTIVE_RUNS_PER_TENANT = 5
 
@@ -333,21 +340,95 @@ class BundleView(APIView):
 
 
 # ------------------------------------------------------------------ findings
+CLOSED_STATUSES = ("accepted", "resolved")
+WORKABLE_STATUSES = ("open", "in_remediation")
+PRIORITIES = {"low", "medium", "high", "critical"}
+MAX_FINDING_EVIDENCE_BYTES = 10 * 1024 * 1024
+
+
+def _truthy(value):
+    return str(value or "").lower() in ("1", "true", "yes")
+
+
+def _can_work_findings(member):
+    """Whether this member's role may work a finding (the same test the API applies to owners)."""
+    from apps.authorization.engine import PolicyEngine as Engine
+
+    return member.role == "TENANT_ADMIN" or Engine._check_rbac_permission(member.role, member, "ai.update", member.tenant_id)
+
+
 class FindingViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
-    queryset = m.Finding.objects.select_related("system", "owner", "reviewed_by").all()
+    queryset = m.Finding.objects.select_related("system", "owner", "assigned_by", "submitted_by", "reviewed_by").all()
     serializer_class = s.FindingSerializer
     http_method_names = ["get", "patch", "post", "head", "options"]
+
+    # Permission each custom action needs before the view runs. Anything not listed uses the HTTP-method default.
+    ACTION_PERMISSIONS = {
+        "assign": "ai.assign",
+        "comment": "ai.comment",
+        "start": "ai.update",
+        "submit": "ai.update",
+        "add_evidence": "ai.update",
+        "download_evidence": "ai.read",
+        "accept": "ai.review",
+        "resolve": "ai.review",
+        "send_back": "ai.review",
+        "summary": "ai.read",
+    }
+
+    @property
+    def required_permission(self):
+        return self.ACTION_PERMISSIONS.get(getattr(self, "action", None))
 
     def get_queryset(self):
         qs = super().get_queryset()
         p = self.request.query_params
+        me = _membership(self.request)
+        today = date.today()
         if p.get("system"):
             qs = qs.filter(system_id=p["system"])
         if p.get("run"):
             qs = qs.filter(run_id=p["run"])
         if p.get("status"):
-            qs = qs.filter(status=p["status"])
+            qs = qs.filter(status__in=[v for v in p["status"].split(",") if v])
+        if p.get("severity"):
+            qs = qs.filter(severity__in=[v.upper() for v in p["severity"].split(",") if v])
+        if p.get("priority"):
+            qs = qs.filter(priority__in=[v.lower() for v in p["priority"].split(",") if v])
+        assignee = p.get("assignee")
+        if _truthy(p.get("mine")) or assignee == "me":
+            qs = qs.filter(owner_id=me.id)
+        elif assignee == "unassigned":
+            qs = qs.filter(owner__isnull=True)
+        elif assignee:
+            try:
+                qs = qs.filter(owner_id=uuid.UUID(assignee))
+            except ValueError:
+                raise ValidationError({"assignee": "Use 'me', 'unassigned' or a member id."})
+        if _truthy(p.get("overdue")):
+            qs = qs.filter(due_date__lt=today).exclude(status__in=CLOSED_STATUSES)
+        if _truthy(p.get("needs_my_review")):
+            qs = qs.filter(status="submitted").exclude(owner_id=me.id).exclude(submitted_by_id=me.id)
+        if p.get("q"):
+            qs = qs.filter(title__icontains=p["q"][:100])
         return qs
+
+    # -------------------------------------------------------------- helpers
+    def _event(self, finding, membership, action_name, from_status, to_status, comment=""):
+        m.FindingEvent.all_objects.create(
+            tenant_id=membership.tenant_id, finding=finding, actor=membership, action=action_name,
+            from_status=from_status, to_status=to_status, comment=comment,
+        )
+
+    def _respond(self, request, finding_id, code=200):
+        return Response(s.FindingSerializer(m.Finding.all_objects.get(id=finding_id), context={"request": request}).data, status=code)
+
+    def _require_assignee(self, membership, finding, verb):
+        if finding.owner_id is not None and finding.owner_id != membership.id:
+            raise PermissionDenied(
+                f"Only the assigned owner ({s._name(finding.owner)}) can {verb} this finding. "
+                "A compliance officer can reassign it."
+            )
 
     def _move(self, request, finding, to, allowed_from, action_name, comment_required=False, review=False):
         membership = _membership(request)
@@ -356,12 +437,18 @@ class FindingViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.RetrieveModelM
             raise ValidationError({"comment": "A comment is required."})
         if review:
             _require(request, "ai.review", resource=finding)
-            if finding.submitted_by_id == membership.id or finding.owner_id == membership.id:
-                raise PermissionDenied("Segregation of duties: the person who owns or submitted a finding cannot review it.")
+            if (finding.submitted_by_id == membership.id or finding.owner_id == membership.id
+                    or finding.attachments.filter(uploaded_by=membership).exists()):
+                raise PermissionDenied("Segregation of duties: the person who owns, fixed or supplied evidence for a finding cannot review it.")
+        else:
+            self._require_assignee(membership, finding, "work on")
         previous = finding.status
         fields = {"status": to, "updated_at": timezone.now()}
+        if not review and finding.owner_id is None:
+            fields["owner"] = membership  # an unassigned item is claimed by the person who starts it
         if action_name == "submit":
             fields["submitted_by"] = membership
+            fields["remediation_note"] = comment
         if review:
             fields.update(reviewed_by=membership, reviewed_at=timezone.now(), review_comment=comment)
         if action_name == "start" and comment:
@@ -370,11 +457,135 @@ class FindingViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.RetrieveModelM
             moved = m.Finding.all_objects.filter(id=finding.id, status__in=allowed_from).update(**fields)
             if not moved:
                 raise ValidationError({"detail": f"A finding that is '{finding.status}' cannot move to '{to}'."})
-            m.FindingEvent.all_objects.create(
-                tenant_id=membership.tenant_id, finding=finding, actor=membership, action=action_name,
-                from_status=previous, to_status=to, comment=comment,
-            )
-        return Response(s.FindingSerializer(m.Finding.all_objects.get(id=finding.id), context={"request": request}).data)
+            self._event(finding, membership, action_name, previous, to, comment)
+        return self._respond(request, finding.id)
+
+    # -------------------------------------------------------------- workflow actions
+    @action(detail=False, methods=["GET"])
+    def summary(self, request):
+        me = _membership(request)
+        today = date.today()
+        base = m.Finding.all_objects.filter(tenant_id=me.tenant_id)
+        open_ = base.exclude(status__in=CLOSED_STATUSES)
+        overdue = open_.filter(due_date__lt=today)
+        mine = open_.filter(owner_id=me.id)
+        by_status = {k: 0 for k, _ in m.Finding.STATUS_CHOICES}
+        for row in base.values("status").annotate(n=Count("id")):
+            by_status[row["status"]] = row["n"]
+        by_severity = {k: 0 for k, _ in m.Finding.SEVERITY_CHOICES}
+        for row in open_.values("severity").annotate(n=Count("id")):
+            by_severity[row["severity"]] = row["n"]
+        people = []
+        for row in open_.filter(owner__isnull=False).values("owner_id", "owner__full_name", "owner__email").annotate(n=Count("id")):
+            people.append({
+                "id": str(row["owner_id"]), "name": row["owner__full_name"] or row["owner__email"].split("@")[0],
+                "open": row["n"], "overdue": overdue.filter(owner_id=row["owner_id"]).count(),
+            })
+        return Response({
+            "total": base.count(), "open": open_.count(), "closed": base.filter(status__in=CLOSED_STATUSES).count(),
+            "unassigned": open_.filter(owner__isnull=True).count(), "overdue": overdue.count(),
+            "awaiting_review": open_.filter(status="submitted").count(),
+            "mine": mine.count(), "mine_overdue": mine.filter(due_date__lt=today).count(),
+            "mine_ready_for_review": mine.filter(status="submitted").count(),
+            "awaiting_my_review": open_.filter(status="submitted").exclude(owner_id=me.id).exclude(submitted_by_id=me.id).count(),
+            "by_status": by_status, "by_severity": by_severity, "by_assignee": sorted(people, key=lambda x: -x["open"]),
+        })
+
+    @action(detail=True, methods=["POST"])
+    def assign(self, request, pk=None):
+        me = _membership(request)
+        finding = self.get_object()
+        if finding.status not in WORKABLE_STATUSES:
+            raise ValidationError({"detail": f"A finding that is '{finding.status}' cannot be assigned. Send it back first."})
+        data = request.data
+        try:
+            target_id = uuid.UUID(str(data.get("owner")))
+        except ValueError:
+            raise ValidationError({"owner": "Choose the person who will fix this."})
+        target = Membership.all_objects.filter(id=target_id, tenant_id=me.tenant_id, status="ACTIVE").first()
+        if target is None:
+            raise ValidationError({"owner": "That person is not an active member of this organisation."})
+        if not _can_work_findings(target):
+            raise ValidationError({"owner": f"{s._name(target)} has a read-only role and cannot work on findings."})
+        due = parse_date(str(data.get("due_date") or ""))
+        if due is None:
+            raise ValidationError({"due_date": "Enter a due date (YYYY-MM-DD)."})
+        if due < date.today():
+            raise ValidationError({"due_date": "The due date cannot be in the past."})
+        priority = str(data.get("priority") or "").lower()
+        if priority not in PRIORITIES:
+            raise ValidationError({"priority": "Use low, medium, high or critical."})
+        note = (data.get("comment") or "").strip()[:1000]
+        verb = "reassign" if finding.owner_id else "assign"
+        text = f"{'Reassigned' if finding.owner_id else 'Assigned'} to {s._name(target)}, due {due.strftime('%d %b %Y')}, priority {priority}."
+        if note:
+            text += f" Note: {note}"
+        with transaction.atomic():
+            moved = m.Finding.all_objects.filter(id=finding.id, status__in=WORKABLE_STATUSES).update(
+                owner=target, due_date=due, priority=priority, assigned_by=me, assigned_at=timezone.now(), updated_at=timezone.now())
+            if not moved:
+                raise ValidationError({"detail": "This finding changed while you were assigning it. Reload and try again."})
+            self._event(finding, me, verb, finding.status, finding.status, text)
+        return self._respond(request, finding.id)
+
+    @action(detail=True, methods=["POST"])
+    def comment(self, request, pk=None):
+        me = _membership(request)
+        finding = self.get_object()
+        text = (request.data.get("comment") or "").strip()
+        if not text:
+            raise ValidationError({"comment": "Write a comment."})
+        if len(text) > 2000:
+            raise ValidationError({"comment": "Comments are limited to 2000 characters."})
+        self._event(finding, me, "comment", finding.status, finding.status, text)
+        return self._respond(request, finding.id, status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["POST"], url_path="evidence", parser_classes=[MultiPartParser, FormParser, JSONParser])
+    def add_evidence(self, request, pk=None):
+        me = _membership(request)
+        finding = self.get_object()
+        if finding.owner_id != me.id:
+            raise PermissionDenied("Only the assigned owner can attach evidence to this finding.")
+        if finding.status not in WORKABLE_STATUSES:
+            raise ValidationError({"detail": "Evidence can only be added while the finding is being worked on."})
+        title = (request.data.get("title") or "").strip()
+        link = (request.data.get("url") or "").strip()
+        upload = request.FILES.get("file")
+        if not title:
+            raise ValidationError({"title": "Give the evidence a short title."})
+        if bool(link) == bool(upload):
+            raise ValidationError({"detail": "Provide either a file or a link."})
+        attachment = m.FindingAttachment(tenant_id=me.tenant_id, finding=finding, title=title[:200], uploaded_by=me)
+        if link:
+            try:
+                URLValidator(schemes=["http", "https"])(link)
+            except DjangoValidationError:
+                raise ValidationError({"url": "Enter a full web address starting with http:// or https://."})
+            attachment.kind, attachment.url = "link", link[:1000]
+        else:
+            if upload.size > MAX_FINDING_EVIDENCE_BYTES:
+                raise ValidationError({"file": "Evidence files are limited to 10 MB."})
+            attachment.kind = "file"
+            attachment.original_filename = upload.name[:255]
+            attachment.sha256 = sha256_of_uploaded(upload)
+            attachment.size_bytes = upload.size
+            attachment.content_type = (upload.content_type or "")[:100]
+            attachment.file.save("evidence.bin", upload, save=False)
+        with transaction.atomic():
+            attachment.save()
+            self._event(finding, me, "evidence_added", finding.status, finding.status,
+                        f"{'Link' if link else 'File'} attached: {attachment.title}")
+        return self._respond(request, finding.id, status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["GET"], url_path=r"evidence/(?P<attachment_id>[0-9a-fA-F-]{36})/download")
+    def download_evidence(self, request, pk=None, attachment_id=None):
+        finding = self.get_object()
+        attachment = finding.attachments.filter(id=attachment_id, kind="file").first()
+        if attachment is None or not attachment.file:
+            raise Http404("Not found.")
+        response = FileResponse(attachment.file.open("rb"), as_attachment=True, filename=attachment.original_filename or "evidence")
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
 
     @action(detail=True, methods=["POST"])
     def start(self, request, pk=None):
@@ -397,14 +608,18 @@ class FindingViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.RetrieveModelM
         return self._move(request, self.get_object(), "in_remediation", ["submitted"], "send_back", comment_required=True, review=True)
 
     def partial_update(self, request, *args, **kwargs):
-        # Only planning fields can be edited; status moves go through the actions above.
-        allowed = {k: v for k, v in request.data.items() if k in ("owner", "due_date", "remediation_note")}
+        # Status moves and (re)assignment have their own actions so that each is recorded on the timeline.
+        if "owner" in request.data or "due_date" in request.data:
+            raise ValidationError({"detail": "Use the assign action to set the owner or due date."})
         finding = self.get_object()
-        ser = self.get_serializer(finding, data=allowed, partial=True)
+        if finding.owner_id != _membership(request).id:
+            raise PermissionDenied("Only the assigned owner can edit the remediation note.")
+        if finding.status not in WORKABLE_STATUSES:
+            raise ValidationError({"detail": "This finding is no longer being worked on."})
+        ser = self.get_serializer(finding, data={"remediation_note": request.data.get("remediation_note", "")}, partial=True)
         ser.is_valid(raise_exception=True)
         ser.save()
         return Response(ser.data)
-
 
 # ------------------------------------------------------------------ vendors and rights
 class DependencyViewSet(AIBaseViewSet, viewsets.ModelViewSet):
@@ -585,6 +800,11 @@ class OverviewView(APIView):
                 "open_findings": open_findings.count(),
                 "overdue_findings": open_findings.filter(due_date__lt=today).count(),
                 "awaiting_review": m.Finding.all_objects.filter(tenant_id=tid, status="submitted").count(),
+                "unassigned_findings": open_findings.filter(owner__isnull=True).count(),
+                "closed_findings": m.Finding.all_objects.filter(tenant_id=tid, status__in=["accepted", "resolved"]).count(),
+                "my_open_actions": open_findings.filter(owner_id=membership.id).count(),
+                "my_overdue_actions": open_findings.filter(owner_id=membership.id, due_date__lt=today).count(),
+                "awaiting_my_review": open_findings.filter(status="submitted").exclude(owner_id=membership.id).exclude(submitted_by_id=membership.id).count(),
                 "control_gaps": sum(c["control_gaps"] for c in cards),
                 "active_runs": m.AuditRun.all_objects.filter(tenant_id=tid, status__in=["queued", "running"]).count(),
             },

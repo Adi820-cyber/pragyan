@@ -2,7 +2,7 @@ from django.db import models
 from django.utils import timezone
 
 from apps.core.models import Membership, TenantScopedModel
-from apps.ai_audit.storage import dataset_upload_path, evidence_upload_path, private_storage
+from apps.ai_audit.storage import dataset_upload_path, evidence_upload_path, finding_evidence_upload_path, private_storage
 
 
 class AISystem(TenantScopedModel):
@@ -198,10 +198,11 @@ class CheckResult(TenantScopedModel):
 
 class Finding(TenantScopedModel):
     SEVERITY_CHOICES = [("LOW", "Low"), ("MEDIUM", "Medium"), ("HIGH", "High")]
+    PRIORITY_CHOICES = [("low", "Low"), ("medium", "Medium"), ("high", "High"), ("critical", "Critical")]
     STATUS_CHOICES = [
         ("open", "Open"),
         ("in_remediation", "In remediation"),
-        ("submitted", "Submitted for review"),
+        ("submitted", "Ready for review"),
         ("accepted", "Risk accepted"),
         ("resolved", "Resolved"),
     ]
@@ -218,6 +219,9 @@ class Finding(TenantScopedModel):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="open", db_index=True)
     owner = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="owned_findings")
     due_date = models.DateField(null=True, blank=True)
+    priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, blank=True, default="")
+    assigned_by = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="assigned_findings")
+    assigned_at = models.DateTimeField(null=True, blank=True)
     remediation_note = models.TextField(blank=True)
     submitted_by = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="submitted_findings")
     reviewed_by = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="reviewed_findings")
@@ -239,6 +243,27 @@ class FindingEvent(TenantScopedModel):
 
     class Meta:
         db_table = "ai_finding_event"
+        ordering = ["created_at"]
+
+
+class FindingAttachment(TenantScopedModel):
+    """Evidence for a remediation: an uploaded file or a link to where the evidence lives."""
+
+    KIND_CHOICES = [("file", "File"), ("link", "Link")]
+
+    finding = models.ForeignKey(Finding, on_delete=models.CASCADE, related_name="attachments")
+    kind = models.CharField(max_length=10, choices=KIND_CHOICES)
+    title = models.CharField(max_length=200)
+    url = models.URLField(max_length=1000, blank=True)
+    file = models.FileField(upload_to=finding_evidence_upload_path, storage=private_storage, blank=True)
+    original_filename = models.CharField(max_length=255, blank=True)
+    sha256 = models.CharField(max_length=64, blank=True)
+    size_bytes = models.PositiveBigIntegerField(default=0)
+    content_type = models.CharField(max_length=100, blank=True)
+    uploaded_by = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL)
+
+    class Meta:
+        db_table = "ai_finding_attachment"
         ordering = ["created_at"]
 
 

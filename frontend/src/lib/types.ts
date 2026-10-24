@@ -279,6 +279,34 @@ export interface HistoryEvent {
   at: string;
 }
 
+export interface FindingAttachment {
+  id: string;
+  kind: "file" | "link";
+  title: string;
+  url: string | null;
+  filename: string;
+  size_bytes: number;
+  sha256: string;
+  by: string | null;
+  at: string;
+}
+
+export interface FindingSummary {
+  total: number;
+  open: number;
+  closed: number;
+  unassigned: number;
+  overdue: number;
+  awaiting_review: number;
+  mine: number;
+  mine_overdue: number;
+  mine_ready_for_review: number;
+  awaiting_my_review: number;
+  by_status: Record<FindingStatus, number>;
+  by_severity: Record<"LOW" | "MEDIUM" | "HIGH", number>;
+  by_assignee: { id: string; name: string; open: number; overdue: number }[];
+}
+
 export interface Finding {
   id: string;
   system: string;
@@ -293,10 +321,17 @@ export interface Finding {
   owner: string | null;
   owner_name: string | null;
   due_date: string | null;
+  priority: "" | "low" | "medium" | "high" | "critical";
+  assigned_by_name: string | null;
+  assigned_at: string | null;
+  submitted_by: string | null;
+  submitted_by_name: string | null;
+  is_overdue: boolean;
   remediation_note: string;
   reviewed_by_name: string | null;
   reviewed_at: string | null;
   review_comment: string;
+  attachments: FindingAttachment[];
   history: HistoryEvent[];
   created_at: string;
 }
@@ -363,6 +398,11 @@ export interface Overview {
     open_findings: number;
     overdue_findings: number;
     awaiting_review: number;
+    unassigned_findings: number;
+    closed_findings: number;
+    my_open_actions: number;
+    my_overdue_actions: number;
+    awaiting_my_review: number;
     control_gaps: number;
     active_runs: number;
   };
