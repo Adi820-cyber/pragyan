@@ -144,6 +144,7 @@ export function PacketTracerView() {
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
 
@@ -158,8 +159,10 @@ export function PacketTracerView() {
   useEffect(() => {
     if (!interfaces.length || sourceId) return;
     const first = availablePresets[0];
+    /* eslint-disable react-hooks/set-state-in-effect */
     setSourceId((first ? findPort(first.src) : interfaces[0])?.id ?? "");
     setDestId((first ? findPort(first.dst) : interfaces[interfaces.length - 1])?.id ?? "");
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [interfaces, availablePresets, findPort, sourceId]);
 
   function applyPreset(id: string) {

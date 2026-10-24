@@ -76,13 +76,15 @@ class CloudAccountViewSet(viewsets.ModelViewSet):
             account.save(update_fields=["status"])
             return Response({
                 "connected": True,
-                "message": f"Successfully authenticated connection to {account.provider} ({account.account_id}).",
+                "verified_live": False,
+                "message": f"Account ID format for {account.provider} looks valid. No live call to the cloud provider was made.",
             })
         else:
             account.status = "ERROR"
             account.save(update_fields=["status"])
             return Response({
                 "connected": False,
+                "verified_live": False,
                 "message": "Invalid Account ID or missing IAM Role configuration.",
             }, status=status.HTTP_400_BAD_REQUEST)
 
@@ -511,7 +513,7 @@ class CloudSecurityDemoSeedView(APIView):
             created_scans.append(str(scan.id))
 
         return Response({
-            "message": "Successfully seeded multi-cloud accounts and executed comprehensive Prowler scans.",
+            "message": "Sample accounts created and scanned against the built-in rule catalogue (simulated results, no cloud calls).",
             "accounts_seeded": 3,
             "scans_completed": len(created_scans),
         }, status=status.HTTP_201_CREATED)

@@ -158,7 +158,7 @@ export function CloudSecurityDashboard({ overview, accounts, scans, findings }: 
       const data = await res.json();
       setConnectionTestResult({
         accountId,
-        message: data.message || "Connection verified successfully.",
+        message: data.message || "Account ID format accepted. No live call was made.",
         ok: res.ok,
       });
     } catch {
@@ -276,6 +276,10 @@ export function CloudSecurityDashboard({ overview, accounts, scans, findings }: 
 
   return (
     <div className="space-y-6">
+      <div role="note" className="p-3 rounded-xl border border-amber-500/40 bg-amber-950/30 text-amber-200 text-xs">
+        Simulated results: scans run the built-in Prowler-style rule catalogue against sample accounts. No call is made to
+        AWS, Azure or Google Cloud, so these findings do not describe a real environment.
+      </div>
       {/* Top Banner & Main Controls */}
       <div className="glass-panel p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-l-4 border-l-cyan-500 shadow-xl shadow-cyan-950/20">
         <div className="space-y-1">
@@ -374,7 +378,7 @@ export function CloudSecurityDashboard({ overview, accounts, scans, findings }: 
                   : "No Scans"}
               </div>
               <div className="text-[11px] text-slate-400">
-                {overview.total_accounts > 0 ? `${overview.overall_score}% compliant` : "Pending initial scan"}
+                {overview.total_accounts > 0 ? `${overview.overall_score}% of checks passed` : "Pending initial scan"}
               </div>
             </div>
           </div>
@@ -419,7 +423,7 @@ export function CloudSecurityDashboard({ overview, accounts, scans, findings }: 
             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
           </div>
           <div className="text-3xl font-extrabold text-emerald-400 my-1">{overview.status_counts.PASS}</div>
-          <div className="text-[11px] text-slate-500">Verified compliant</div>
+          <div className="text-[11px] text-slate-500">Checks passed (simulated)</div>
         </div>
 
         {/* Multi-cloud Accounts */}
