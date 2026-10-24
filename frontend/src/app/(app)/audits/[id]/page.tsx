@@ -24,13 +24,13 @@ export default async function AuditDetailPage({ params }: PageProps<"/audits/[id
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) notFound();
     return (
-      <PageShell title="Audit">
+      <PageShell title="Audit Details">
         <ErrorState message={errorMessage(error)} />
       </PageShell>
     );
   }
 
-  const title = `${run.system_name}, model ${run.model_version_label}`;
+  const title = `${run.system_name} (Model ${run.model_version_label})`;
 
   if (run.status !== "completed") {
     return (
@@ -57,7 +57,9 @@ export default async function AuditDetailPage({ params }: PageProps<"/audits/[id
   return (
     <PageShell
       title={title}
-      subtitle={`Finished ${dateTime(run.finished_at)} · reference "${run.reference_dataset_name}"${run.current_dataset_name ? ` · current "${run.current_dataset_name}"` : ""}`}
+      subtitle={`Completed ${dateTime(run.finished_at)} · Reference dataset "${run.reference_dataset_name}"${
+        run.current_dataset_name ? ` · Comparison dataset "${run.current_dataset_name}"` : ""
+      }`}
       sample={report?.datasets.some((d) => d.is_sample && !d.is_real_data)}
       realData={(() => {
         const real = report?.datasets.find((d) => d.is_real_data);
@@ -65,8 +67,8 @@ export default async function AuditDetailPage({ params }: PageProps<"/audits/[id
       })()}
       actions={
         <Link href={`/reports/${run.id}`} className={ghostButtonClass}>
-          <FileText className="w-4 h-4" aria-hidden="true" />
-          View report
+          <FileText className="w-3.5 h-3.5" aria-hidden="true" />
+          <span>View exportable report</span>
         </Link>
       }
     >
@@ -79,30 +81,50 @@ export default async function AuditDetailPage({ params }: PageProps<"/audits/[id
           coverage={report.coverage as never}
         />
       )}
-      <Panel title="How this run was configured">
-        <dl className="grid md:grid-cols-2 gap-3 text-xs">
-          <div>
-            <dt className="text-slate-400">{run.config.system_type === "llm" ? "Answer / prompt / source columns" : "Prediction / outcome / favourable value"}</dt>
-            <dd className="text-slate-200">
+      <Panel title="Audit Execution Configuration">
+        <dl className="grid sm:grid-cols-2 gap-4 text-xs">
+          <div className="space-y-1">
+            <dt className="text-zinc-400 font-medium">
               {run.config.system_type === "llm"
-                ? `${run.config.output_column ?? "none"} / ${run.config.prompt_column ?? "none"} / ${run.config.context_column ?? "none"}`
-                : `${run.config.prediction_column} / ${run.config.label_column ?? "none"} / ${run.config.favourable_label}`}
+                ? "Output / Prompt / Source columns"
+                : "Prediction / Outcome / Favourable value"}
+            </dt>
+            <dd className="text-zinc-200 font-mono bg-zinc-900/60 p-2 rounded-md border border-zinc-800">
+              {run.config.system_type === "llm"
+                ? `${run.config.output_column ?? "none"} / ${run.config.prompt_column ?? "none"} / ${
+                    run.config.context_column ?? "none"
+                  }`
+                : `${run.config.prediction_column} / ${run.config.label_column ?? "none"} / ${
+                    run.config.favourable_label
+                  }`}
             </dd>
           </div>
-          <div>
-            <dt className="text-slate-400">Groups compared</dt>
-            <dd className="text-slate-200">{run.config.group_columns.join(", ") || "none"}</dd>
-          </div>
-          <div className="md:col-span-2">
-            <dt className="text-slate-400">Policy thresholds</dt>
-            <dd className="text-slate-200">
-              {Object.entries(run.config.effective_thresholds ?? {}).map(([k, v]) => `${k}=${v}`).join(", ")}
-              <span className="block text-slate-500 mt-1">{run.config.thresholds_rationale}</span>
+          <div className="space-y-1">
+            <dt className="text-zinc-400 font-medium">Demographic / Sensitive Groups Evaluated</dt>
+            <dd className="text-zinc-200 font-mono bg-zinc-900/60 p-2 rounded-md border border-zinc-800">
+              {run.config.group_columns.join(", ") || "None specified"}
             </dd>
           </div>
-          <div className="md:col-span-2">
-            <dt className="text-slate-400">Software versions</dt>
-            <dd className="text-slate-200">{Object.entries(run.library_versions).map(([k, v]) => `${k} ${v}`).join(", ")}</dd>
+          <div className="sm:col-span-2 space-y-1">
+            <dt className="text-zinc-400 font-medium">Active Policy Thresholds</dt>
+            <dd className="text-zinc-200 font-mono text-[11px] bg-zinc-900/60 p-2.5 rounded-md border border-zinc-800">
+              {Object.entries(run.config.effective_thresholds ?? {})
+                .map(([k, v]) => `${k} = ${v}`)
+                .join("  |  ")}
+              {run.config.thresholds_rationale && (
+                <span className="block text-zinc-400 font-sans text-xs mt-1.5 pt-1.5 border-t border-zinc-800/60">
+                  {run.config.thresholds_rationale}
+                </span>
+              )}
+            </dd>
+          </div>
+          <div className="sm:col-span-2 space-y-1">
+            <dt className="text-zinc-400 font-medium">Underlying Tool Versions</dt>
+            <dd className="text-zinc-300 font-mono text-[11px]">
+              {Object.entries(run.library_versions)
+                .map(([k, v]) => `${k} ${v}`)
+                .join(" · ")}
+            </dd>
           </div>
         </dl>
       </Panel>

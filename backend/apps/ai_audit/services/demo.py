@@ -13,6 +13,7 @@ from django.core.files.base import ContentFile
 
 from apps.ai_audit import models as m
 from apps.ai_audit.sample import compas as compas_data
+from apps.ai_audit.sample import german_credit as german_credit_data
 from apps.ai_audit.sample import llm_sample
 from apps.ai_audit.sample.generate import SAMPLE_MODELS, build_scenario
 from apps.ai_audit.services import controls as controls_service
@@ -23,6 +24,7 @@ from apps.core.models import Membership
 SYSTEM_NAME = "HireLens candidate screening (sample)"
 LLM_SYSTEM_NAME = "FinSum filing assistant (sample)"
 COMPAS_SYSTEM_NAME = "COMPAS recidivism risk tool (real public data)"
+GERMAN_CREDIT_SYSTEM_NAME = "German Credit Scoring (Kaggle Real Data)"
 
 # Pre-filled mapping for the synthetic HireLens sample only. For real data the user chooses every column.
 DEMO_CONFIG = {
@@ -223,3 +225,60 @@ def seed_compas(tenant, actor: Membership, compas_file: Optional[str] = None) ->
     _store_dataset(tenant, system, actor, "current", "COMPAS current: 2014 (tool, v1 and v2 predictions)", frames["current"],
                    date(2014, 1, 1), date(2014, 12, 31), config, note, "compas_current.csv", is_real_data=True)
     return system
+
+
+def _german_credit_config(prediction: str, features: list[str]) -> dict:
+    others = [p for p in ("pred_v1", "pred_v2") if p != prediction]
+    return {
+        "prediction_column": prediction,
+        "label_column": "credit_risk",
+        "favourable_label": "1",
+        "group_columns": ["sex", "age_group", "foreign_worker"],
+        "id_columns": ["applicant_id"],
+        "feature_columns": features,
+        "excluded_columns": others,
+        "min_group_size": 20,
+        "bootstrap": 300,
+        "seed": 42,
+    }
+
+
+def seed_german_credit(tenant, actor: Membership) -> m.AISystem:
+    existing = m.AISystem.all_objects.filter(tenant=tenant, name=GERMAN_CREDIT_SYSTEM_NAME).first()
+    if existing:
+        return existing
+    path: Path = german_credit_data.ensure_file()
+    frames = german_credit_data.build_scenario(path)
+    reviewer = _find_reviewer(tenant, actor)
+    config = {
+        "by_version": {
+            "v1": _german_credit_config("pred_v1", german_credit_data.FEATURES_V1),
+            "v2": _german_credit_config("pred_v2", german_credit_data.FEATURES_V2),
+        }
+    }
+    system = m.AISystem.all_objects.create(
+        tenant=tenant, name=GERMAN_CREDIT_SYSTEM_NAME, system_type="tabular",
+        purpose="Automated credit scoring and loan underwriting model based on the real Kaggle / UCI German Credit Risk dataset. "
+                "Audited for fair lending compliance, demographic disparate impact (gender, age), and concept drift.",
+        decision_affected="Credit card issuing, personal loan approvals, and interest rate tiers",
+        intended_population="Consumer loan and retail banking applicants",
+        owner=actor, reviewer=reviewer, jurisdictions=["EU", "India", "US"], automated_decision=True,
+    )
+    m.ModelVersion.all_objects.create(
+        tenant=tenant, system=system, version_label="v1", source="server_sample", sample_key="german_credit_v1", favourable_label="1",
+        model_type="GradientBoostingClassifier", feature_columns=list(german_credit_data.FEATURES_V1),
+        notes="Baseline production model trained with duration, amount, personal status (gender), age, and economic indicators.",
+    )
+    m.ModelVersion.all_objects.create(
+        tenant=tenant, system=system, version_label="v2", source="server_sample", sample_key="german_credit_v2", favourable_label="1",
+        model_type="GradientBoostingClassifier", feature_columns=list(german_credit_data.FEATURES_V2),
+        notes="Debiased candidate model retrained without demographic proxies to satisfy fair lending and non-discrimination mandates.",
+    )
+    note = german_credit_data.SOURCE_NOTE
+    _store_dataset(tenant, system, actor, "reference", "German Credit reference: historical applicants (v1 and v2 predictions)", frames["reference"],
+                   date(2023, 1, 1), date(2023, 12, 31), config, note, "german_credit_reference.csv", is_real_data=True)
+    _store_dataset(tenant, system, actor, "current", "German Credit current: production monitoring (v1 and v2 predictions)", frames["current"],
+                   date(2024, 1, 1), date(2024, 12, 31), config, note, "german_credit_current.csv", is_real_data=True)
+    _seed_controls(tenant, system, actor, reviewer)
+    return system
+

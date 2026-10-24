@@ -2,10 +2,17 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Loader2 } from "lucide-react";
 import { call, errText } from "@/lib/client/api";
 import { Field, buttonClass, inputClass } from "@/components/ui/Panel";
 
-export function ModelVersionForm({ systemId, systemType }: { systemId: string; systemType: "llm" | "tabular" }) {
+export function ModelVersionForm({
+  systemId,
+  systemType,
+}: {
+  systemId: string;
+  systemType: "llm" | "tabular";
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,69 +50,104 @@ export function ModelVersionForm({ systemId, systemType }: { systemId: string; s
     <form onSubmit={submit} className="space-y-4">
       {isLlm ? (
         <div className="grid md:grid-cols-3 gap-4">
-          <Field label="Version label" htmlFor="version_label">
-            <input id="version_label" name="version_label" required maxLength={100} placeholder="v1" className={inputClass} />
+          <Field label="Version Identifier" htmlFor="version_label">
+            <input
+              id="version_label"
+              name="version_label"
+              required
+              maxLength={100}
+              placeholder="e.g. v2.1-prod"
+              className={inputClass}
+            />
           </Field>
-          <Field label="Where the model runs" htmlFor="source">
+          <Field label="Hosting Environment" htmlFor="source">
             <select id="source" value={source} onChange={(e) => setSource(e.target.value)} className={inputClass}>
-              <option value="llm_hosted">Hosted by a provider (API)</option>
-              <option value="llm_self_hosted">Self-hosted</option>
+              <option value="llm_hosted">Third-Party Hosted Provider API</option>
+              <option value="llm_self_hosted">Self-Hosted Private Infrastructure</option>
             </select>
           </Field>
-          <Field label="Provider" htmlFor="provider" hint="For example the company that supplies the API.">
-            <input id="provider" name="provider" maxLength={100} className={inputClass} />
+          <Field label="Service Provider" htmlFor="provider" hint="Entity supplying the model endpoint.">
+            <input id="provider" name="provider" maxLength={100} placeholder="e.g. OpenAI, Anthropic, Bedrock" className={inputClass} />
           </Field>
-          <Field label="Model name" htmlFor="model_name">
-            <input id="model_name" name="model_name" maxLength={100} className={inputClass} />
+          <Field label="Foundation Model Name" htmlFor="model_name">
+            <input id="model_name" name="model_name" maxLength={100} placeholder="e.g. gpt-4o, claude-3-5-sonnet" className={inputClass} />
           </Field>
-          <Field label="Prompt or pipeline version" htmlFor="prompt_version" hint="Changing the prompt changes behaviour, so version it.">
-            <input id="prompt_version" name="prompt_version" maxLength={100} className={inputClass} />
+          <Field
+            label="Prompt / System Instruction Version"
+            htmlFor="prompt_version"
+            hint="System instruction version hash."
+          >
+            <input id="prompt_version" name="prompt_version" maxLength={100} placeholder="e.g. prompt-v1.4" className={inputClass} />
           </Field>
         </div>
       ) : (
         <>
           <div className="grid md:grid-cols-3 gap-4">
-            <Field label="Version label" htmlFor="version_label">
-              <input id="version_label" name="version_label" required maxLength={100} placeholder="v1" className={inputClass} />
+            <Field label="Version Identifier" htmlFor="version_label">
+              <input
+                id="version_label"
+                name="version_label"
+                required
+                maxLength={100}
+                placeholder="e.g. v1.0.0"
+                className={inputClass}
+              />
             </Field>
-            <Field label="How explanations are produced" htmlFor="source">
+            <Field label="Explanation Generation Mode" htmlFor="source">
               <select id="source" value={source} onChange={(e) => setSource(e.target.value)} className={inputClass}>
-                <option value="predictions_only">Predictions only (no explanations)</option>
-                <option value="local_bundle">My own model, using the local audit tool</option>
-                <option value="server_sample">Built-in sample model</option>
+                <option value="predictions_only">Predictions Only (Skip SHAP feature importances)</option>
+                <option value="local_bundle">Proprietary Model (Audited via local CLI bundle)</option>
+                <option value="server_sample">Server Demonstration Model</option>
               </select>
             </Field>
-            <Field label="Favourable outcome value" htmlFor="favourable_label" hint="The prediction value that is good for the person, such as 1 for approved. Be explicit: 1 can mean rejection.">
+            <Field
+              label="Favourable Outcome Value"
+              htmlFor="favourable_label"
+              hint="Prediction output designating positive treatment (e.g. '1', 'Approved')."
+            >
               <input id="favourable_label" name="favourable_label" defaultValue="1" className={inputClass} />
             </Field>
           </div>
           {source === "server_sample" && (
-            <Field label="Sample model" htmlFor="sample_key">
+            <Field label="Demonstration Model Profile" htmlFor="sample_key">
               <select id="sample_key" name="sample_key" className={inputClass} defaultValue="compas_v1">
-                <option value="compas_v1">COMPAS v1 (real data; uses sex and prior arrests)</option>
-                <option value="compas_v2">COMPAS v2 (real data; without sex or priors)</option>
-                <option value="hirelens_v1">HireLens v1 (synthetic; uses city tier)</option>
-                <option value="hirelens_v2">HireLens v2 (synthetic; without city tier)</option>
+                <option value="compas_v1">COMPAS v1 (Real recidivism scoring dataset; sex & prior arrests)</option>
+                <option value="compas_v2">COMPAS v2 (Real recidivism scoring dataset; protected features removed)</option>
+                <option value="hirelens_v1">HireLens v1 (Synthetic screening classifier; includes metro tier)</option>
+                <option value="hirelens_v2">HireLens v2 (Synthetic screening classifier; demographic blind)</option>
               </select>
             </Field>
           )}
           {source === "local_bundle" && (
-            <p className="text-xs text-slate-400">
-              Your model file never leaves your machine. Run <code className="text-cyan-300">reskure_audit.py explain</code> locally, then upload the result bundle
-              with <code className="text-cyan-300">reskure_audit.py upload</code>. See <code>tools/reskure_audit_cli</code>.
-            </p>
+            <div className="p-3 rounded-md border border-zinc-800 bg-zinc-900/60 text-xs text-zinc-300">
+              Model weights never leave your local infrastructure. Generate local SHAP explanations using the CLI tool:
+              <pre className="mt-1 font-mono text-[11px] text-zinc-200 bg-zinc-950 p-2 rounded border border-zinc-800">
+                python tools/reskure_audit_cli/reskure_audit.py explain --model model.pkl
+              </pre>
+            </div>
           )}
         </>
-      )}      <Field label="Notes" htmlFor="notes">
-        <input id="notes" name="notes" className={inputClass} />
-      </Field>
-      {error && (
-        <p role="alert" className="text-xs text-rose-300">
-          {error}
-        </p>
       )}
+
+      <Field label="Version Release Notes" htmlFor="notes">
+        <input id="notes" name="notes" placeholder="e.g. Retrained on Q3 2024 applicant data" className={inputClass} />
+      </Field>
+
+      {error && (
+        <div role="alert" className="p-2.5 rounded-md border border-red-500/30 bg-red-500/10 text-xs text-red-200">
+          {error}
+        </div>
+      )}
+
       <button type="submit" disabled={busy} className={buttonClass}>
-        {busy ? "Saving..." : "Add model version"}
+        {busy ? (
+          <>
+            <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+            <span>Registering version...</span>
+          </>
+        ) : (
+          <span>Save Model Version</span>
+        )}
       </button>
     </form>
   );

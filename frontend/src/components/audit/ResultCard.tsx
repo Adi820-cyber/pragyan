@@ -56,24 +56,38 @@ export function formatValue(r: Pick<CheckResult, "metric" | "value" | "unit">): 
 }
 
 export function ResultCard({ r }: { r: CheckResult }) {
-  const ci = r.ci_low !== null && r.ci_high !== null ? `95% interval ${formatValue({ ...r, value: r.ci_low })} to ${formatValue({ ...r, value: r.ci_high })}` : null;
+  const ci =
+    r.ci_low !== null && r.ci_high !== null
+      ? `95% CI [${formatValue({ ...r, value: r.ci_low })}, ${formatValue({ ...r, value: r.ci_high })}]`
+      : null;
+
   return (
-    <div className="rounded-lg border border-white/10 bg-slate-900/50 p-4">
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 space-y-2.5">
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-100">{METRIC_LABEL[r.metric] ?? r.metric}</h3>
-          {r.subject && <p className="text-xs text-slate-400">{r.subject}</p>}
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-zinc-100 truncate">{METRIC_LABEL[r.metric] ?? r.metric}</h3>
+          {r.subject && <p className="text-xs text-zinc-400 truncate mt-0.5">{r.subject}</p>}
         </div>
-        <StateBadge state={r.state} />
+        <div className="shrink-0">
+          <StateBadge state={r.state} />
+        </div>
       </div>
-      <div className="mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-1">
-        <span className="text-2xl font-bold text-white">{formatValue(r)}</span>
-        {ci && <span className="text-xs text-slate-400">{ci}</span>}
-        {r.threshold !== null && <span className="text-xs text-slate-400">policy threshold {r.threshold}</span>}
-        {r.support_n !== null && <span className="text-xs text-slate-400">based on {r.support_n.toLocaleString()} rows</span>}
+
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span className="text-2xl font-bold text-zinc-100 tabular-nums">{formatValue(r)}</span>
+        {ci && <span className="text-xs text-zinc-400 font-mono tabular-nums">{ci}</span>}
+        {r.threshold !== null && (
+          <span className="text-xs text-zinc-400 font-mono tabular-nums">threshold: {r.threshold}</span>
+        )}
+        {r.support_n !== null && (
+          <span className="text-xs text-zinc-400 tabular-nums">n = {r.support_n.toLocaleString()}</span>
+        )}
       </div>
-      <p className="text-xs text-slate-300 mt-2">{r.summary}</p>
-      {r.origin === "local_bundle" && <p className="text-[11px] text-sky-300 mt-1">Supplied by the local audit tool, not recomputed by the server.</p>}
+
+      <p className="text-xs text-zinc-300 leading-relaxed">{r.summary}</p>
+      {r.origin === "local_bundle" && (
+        <p className="text-[11px] text-zinc-400 mt-1">Supplied by local execution bundle.</p>
+      )}
     </div>
   );
 }

@@ -115,6 +115,9 @@ else:
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": BASE_DIR / "db.sqlite3",
+            "OPTIONS": {
+                "timeout": 30,
+            },
         }
     }
 
@@ -174,7 +177,8 @@ SPECTACULAR_SETTINGS = {
     ],
 }
 
-# CORS: explicit origins only.
+# CORS: explicit origins only in production; open in DEBUG / development.
+CORS_ALLOW_ALL_ORIGINS = DEBUG or os.getenv("CORS_ALLOW_ALL_ORIGINS", "False").lower() in ("true", "1")
 CORS_ALLOWED_ORIGINS = _env_list("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
 CORS_ALLOW_HEADERS = [
     "accept",

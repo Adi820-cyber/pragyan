@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Database, FlaskConical } from "lucide-react";
+import { Database, Info } from "lucide-react";
 import { Header } from "./Header";
 import { getMe } from "@/lib/server/api";
 
@@ -21,30 +21,34 @@ export async function PageShell({
 }) {
   const me = await getMe();
   return (
-    <>
+    <div className="flex-1 flex flex-col min-w-0">
       <Header title={title} subtitle={subtitle} me={me} />
-      <main id="main" className="p-8 space-y-6 flex-1">
+      <main id="main" className="p-6 md:p-8 space-y-6 flex-1 max-w-7xl w-full mx-auto min-w-0">
         {sample && (
-          <div role="note" className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
-            <FlaskConical className="w-4 h-4 text-amber-300 mt-0.5 shrink-0" aria-hidden="true" />
-            <p className="text-xs text-amber-100">
-              <strong>Sample mode.</strong> This view includes synthetic demonstration data. No real people are involved and the results do
-              not describe any real system.
-            </p>
+          <div
+            role="note"
+            className="flex items-start gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200"
+          >
+            <Info className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" aria-hidden="true" />
+            <div className="leading-relaxed">
+              <strong className="font-semibold text-amber-100">Sample evaluation dataset.</strong> This view includes synthetic demo data. Results do not describe production systems or real individuals.
+            </div>
           </div>
         )}
         {realData && (
-          <div role="note" className="flex items-start gap-3 rounded-xl border border-sky-500/30 bg-sky-500/10 px-4 py-3">
-            <Database className="w-4 h-4 text-sky-300 mt-0.5 shrink-0" aria-hidden="true" />
-            <p className="text-xs text-sky-100">
-              <strong>Real public data.</strong> {realData.source || "This view uses a public dataset."} It is used to show how an audit reads a real deployed system.
-              The results describe that dataset, not your organisation, and are not a finding about any individual.
-            </p>
+          <div
+            role="note"
+            className="flex items-start gap-3 rounded-md border border-blue-500/40 bg-blue-500/10 px-4 py-3 text-xs text-blue-200"
+          >
+            <Database className="w-4 h-4 text-blue-400 mt-0.5 shrink-0" aria-hidden="true" />
+            <div className="leading-relaxed">
+              <strong className="font-semibold text-blue-100">Public reference dataset.</strong> {realData.source || "This view uses a public dataset."} Used strictly to demonstrate audit evaluation on real data structures.
+            </div>
           </div>
         )}
-        {actions && <div className="flex justify-end gap-2">{actions}</div>}
+        {actions && <div className="flex items-center justify-end gap-2.5">{actions}</div>}
         {children}
       </main>
-    </>
+    </div>
   );
 }

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Loader2, Plus } from "lucide-react";
 import { call, errText } from "@/lib/client/api";
 import { StateBadge } from "@/components/ui/StateBadge";
 import { Field, buttonClass, ghostButtonClass, inputClass } from "@/components/ui/Panel";
@@ -9,14 +10,22 @@ import { canEdit, dateOnly } from "@/lib/format";
 import type { Dependency } from "@/lib/types";
 
 const ROLE_LABEL: Record<string, string> = {
-  model_provider: "Model / LLM provider",
-  cloud: "Cloud or hosting",
-  data_labelling: "Data labelling",
-  analytics: "Analytics or monitoring",
-  other: "Other",
+  model_provider: "Model / LLM API Provider",
+  cloud: "Cloud / Hosting Infrastructure",
+  data_labelling: "Data Labelling / Annotation",
+  analytics: "Observability / Monitoring",
+  other: "Other Sub-processor",
 };
 
-export function VendorsPanel({ systemId, vendors, role }: { systemId: string; vendors: Dependency[]; role: string }) {
+export function VendorsPanel({
+  systemId,
+  vendors,
+  role,
+}: {
+  systemId: string;
+  vendors: Dependency[];
+  role: string;
+}) {
   const router = useRouter();
   const [editing, setEditing] = useState<Dependency | "new" | null>(null);
   const [busy, setBusy] = useState(false);
@@ -44,7 +53,10 @@ export function VendorsPanel({ systemId, vendors, role }: { systemId: string; ve
       exit_plan: yes("exit_plan"),
       criticality: f.get("criticality"),
       last_reviewed: f.get("last_reviewed") || null,
-      data_categories: String(f.get("data_categories") || "").split(",").map((s) => s.trim()).filter(Boolean),
+      data_categories: String(f.get("data_categories") || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
     };
     setBusy(true);
     setError(null);
@@ -61,7 +73,7 @@ export function VendorsPanel({ systemId, vendors, role }: { systemId: string; ve
   }
 
   async function remove(v: Dependency) {
-    if (!window.confirm(`Remove ${v.name} from the register? Past audits keep their own copy.`)) return;
+    if (!window.confirm(`Remove ${v.name} from the active vendor registry?`)) return;
     try {
       await call("DELETE", `ai/dependencies/${v.id}/`);
       router.refresh();
@@ -71,90 +83,188 @@ export function VendorsPanel({ systemId, vendors, role }: { systemId: string; ve
   }
 
   const current = editing && editing !== "new" ? editing : null;
-  const check = "h-4 w-4 rounded border-white/20 bg-slate-900 accent-cyan-500";
+  const check = "h-4 w-4 rounded border-zinc-700 bg-zinc-900 text-zinc-100 cursor-pointer";
 
   return (
     <div className="space-y-4">
-      <p className="text-xs text-slate-400">
-        List every vendor, cloud service or model provider that touches this system. The audit checks contracts, data flows, training use, retention, transfers and exit options.
-        These are your declarations; the tool cannot verify them.
+      <p className="text-xs text-zinc-400">
+        Inventory of sub-processors, cloud hosting partners, and model providers. Audits assess data processing agreements (DPA), training opt-outs, cross-border transfers, and retention limits.
       </p>
+
       {vendors.length === 0 ? (
-        <p className="text-sm text-amber-200">No vendors recorded yet. An audit will report this as a gap.</p>
+        <div className="p-3.5 rounded-md border border-amber-500/30 bg-amber-500/10 text-xs text-amber-200">
+          No external processors recorded. If this system uses third-party APIs or cloud hosts, an audit will record an omission gap.
+        </div>
       ) : (
-        <ul className="space-y-2">
+        <ul className="divide-y divide-zinc-800/80 border border-zinc-800 rounded-md bg-zinc-900/40 overflow-hidden">
           {vendors.map((v) => (
-            <li key={v.id} className="rounded-lg border border-white/10 bg-slate-900/40 p-3 flex flex-wrap items-center gap-3">
-              <div className="flex-1 min-w-52">
-                <div className="text-sm font-semibold text-slate-100">{v.name}</div>
-                <div className="text-xs text-slate-400">
-                  {ROLE_LABEL[v.role]}{v.service ? ` · ${v.service}` : ""}{v.region ? ` · ${v.region}` : ""} · last reviewed {dateOnly(v.last_reviewed)}
+            <li key={v.id} className="p-3.5 text-xs flex flex-wrap items-center justify-between gap-3 hover:bg-zinc-800/20 transition-colors">
+              <div className="space-y-0.5 min-w-[240px] flex-1">
+                <div className="font-semibold text-zinc-100">{v.name}</div>
+                <div className="text-zinc-400">
+                  {ROLE_LABEL[v.role]}
+                  {v.service ? ` · ${v.service}` : ""}
+                  {v.region ? ` · ${v.region}` : ""} · Reviewed {dateOnly(v.last_reviewed)}
                 </div>
               </div>
-              <StateBadge state={v.contract_in_place ? "no_alert" : "review_required"} label={v.contract_in_place ? "Contract on record" : "No contract on record"} />
-              {v.personal_data_shared && <StateBadge state="insufficient_evidence" label="Personal data shared" />}
+
+              <div className="flex items-center gap-2">
+                <StateBadge
+                  state={v.contract_in_place ? "no_alert" : "review_required"}
+                  label={v.contract_in_place ? "DPA on record" : "No contract on file"}
+                />
+                {v.personal_data_shared && <StateBadge state="insufficient_evidence" label="Shares PII" />}
+              </div>
+
               {editable && (
-                <span className="flex gap-3 text-xs">
-                  <button type="button" onClick={() => setEditing(v)} className="text-cyan-300 hover:text-cyan-200 underline">Edit</button>
-                  <button type="button" onClick={() => remove(v)} className="text-rose-300 hover:text-rose-200 underline">Remove</button>
-                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setEditing(v)}
+                    className="text-xs font-medium text-zinc-300 hover:text-white px-2.5 py-1.5 rounded border border-zinc-700 bg-zinc-800 hover:bg-zinc-700 transition-colors cursor-pointer"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => remove(v)}
+                    className="text-xs font-medium text-red-300 hover:text-red-100 px-2.5 py-1.5 rounded hover:bg-red-950/50 transition-colors cursor-pointer"
+                  >
+                    Remove
+                  </button>
+                </div>
               )}
             </li>
           ))}
         </ul>
       )}
+
       {editable && !editing && (
-        <button type="button" onClick={() => setEditing("new")} className={ghostButtonClass}>Add a vendor</button>
+        <button type="button" onClick={() => setEditing("new")} className={ghostButtonClass}>
+          <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+          <span>Add Third-Party Vendor</span>
+        </button>
       )}
+
       {editing && (
-        <form key={current?.id ?? "new"} onSubmit={save} className="rounded-lg border border-white/10 p-4 space-y-4">
-          <h3 className="text-sm font-bold text-white">{current ? `Edit ${current.name}` : "Add a vendor"}</h3>
-          <div className="grid md:grid-cols-3 gap-4">
-            <Field label="Name" htmlFor="v_name"><input id="v_name" name="name" required defaultValue={current?.name} className={inputClass} /></Field>
-            <Field label="Service" htmlFor="v_service"><input id="v_service" name="service" defaultValue={current?.service} className={inputClass} /></Field>
-            <Field label="Role" htmlFor="v_role">
-              <select id="v_role" name="role" defaultValue={current?.role ?? "model_provider"} className={inputClass}>
-                {Object.entries(ROLE_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-              </select>
-            </Field>
-            <Field label="Where data is processed" htmlFor="v_region"><input id="v_region" name="region" defaultValue={current?.region} className={inputClass} /></Field>
-            <Field label="Trains on your data?" htmlFor="v_train">
-              <select id="v_train" name="trains_on_customer_data" defaultValue={current?.trains_on_customer_data ?? "unknown"} className={inputClass}>
-                <option value="unknown">Unknown</option><option value="no">No</option><option value="yes">Yes</option>
-              </select>
-            </Field>
-            <Field label="Retention at the vendor (days)" htmlFor="v_ret"><input id="v_ret" name="retention_days" type="number" min={0} defaultValue={current?.retention_days ?? ""} className={inputClass} /></Field>
-            <Field label="Criticality" htmlFor="v_crit">
-              <select id="v_crit" name="criticality" defaultValue={current?.criticality ?? "medium"} className={inputClass}>
-                <option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
-              </select>
-            </Field>
-            <Field label="Last reviewed" htmlFor="v_rev"><input id="v_rev" name="last_reviewed" type="date" defaultValue={current?.last_reviewed ?? ""} className={inputClass} /></Field>
-            <Field label="Transfer mechanism" htmlFor="v_mech" hint="Needed when data leaves the EEA under GDPR."><input id="v_mech" name="transfer_mechanism" defaultValue={current?.transfer_mechanism} className={inputClass} /></Field>
+        <form
+          key={current?.id ?? "new"}
+          onSubmit={save}
+          className="rounded-md border border-zinc-800 bg-zinc-900/60 p-5 space-y-4 shadow-sm"
+        >
+          <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+            <h4 className="text-sm font-semibold text-zinc-100">
+              {current ? `Edit Vendor: ${current.name}` : "Register Third-Party Sub-processor"}
+            </h4>
+            <button
+              type="button"
+              onClick={() => setEditing(null)}
+              className="text-xs text-zinc-400 hover:text-zinc-200 cursor-pointer"
+            >
+              Cancel
+            </button>
           </div>
-          <Field label="Data it receives (comma separated)" htmlFor="v_cats"><input id="v_cats" name="data_categories" defaultValue={current?.data_categories.join(", ")} className={inputClass} /></Field>
-          <div className="flex flex-wrap gap-x-6 gap-y-2">
+
+          <div className="grid md:grid-cols-3 gap-4">
+            <Field label="Vendor Entity Name" htmlFor="v_name">
+              <input id="v_name" name="name" required defaultValue={current?.name} className={inputClass} />
+            </Field>
+            <Field label="Service / Component" htmlFor="v_service">
+              <input id="v_service" name="service" defaultValue={current?.service} placeholder="e.g. GPT-4o API" className={inputClass} />
+            </Field>
+            <Field label="Processing Role" htmlFor="v_role">
+              <select id="v_role" name="role" defaultValue={current?.role ?? "model_provider"} className={inputClass}>
+                {Object.entries(ROLE_LABEL).map(([k, l]) => (
+                  <option key={k} value={k}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Hosting Region / Cloud DC" htmlFor="v_region">
+              <input id="v_region" name="region" defaultValue={current?.region} placeholder="e.g. us-east-1, Mumbai" className={inputClass} />
+            </Field>
+            <Field label="Provider Trains on Customer Data?" htmlFor="v_train">
+              <select
+                id="v_train"
+                name="trains_on_customer_data"
+                defaultValue={current?.trains_on_customer_data ?? "unknown"}
+                className={inputClass}
+              >
+                <option value="unknown">Unknown (Flag as Gap)</option>
+                <option value="no">No (Zero data retention / training opt-out)</option>
+                <option value="yes">Yes (Trains on inputs)</option>
+              </select>
+            </Field>
+            <Field label="Vendor Retention (Days)" htmlFor="v_ret">
+              <input
+                id="v_ret"
+                name="retention_days"
+                type="number"
+                min={0}
+                defaultValue={current?.retention_days ?? ""}
+                placeholder="e.g. 30"
+                className={inputClass}
+              />
+            </Field>
+            <Field label="Dependency Criticality" htmlFor="v_crit">
+              <select id="v_crit" name="criticality" defaultValue={current?.criticality ?? "medium"} className={inputClass}>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </Field>
+            <Field label="Last DPA Review Date" htmlFor="v_rev">
+              <input id="v_rev" name="last_reviewed" type="date" defaultValue={current?.last_reviewed ?? ""} className={inputClass} />
+            </Field>
+            <Field label="GDPR Cross-Border Mechanism" htmlFor="v_mech" hint="SCCs or adequacy decision.">
+              <input id="v_mech" name="transfer_mechanism" defaultValue={current?.transfer_mechanism} placeholder="e.g. Standard Contractual Clauses" className={inputClass} />
+            </Field>
+          </div>
+
+          <Field label="Shared Data Categories (Comma-separated)" htmlFor="v_cats">
+            <input
+              id="v_cats"
+              name="data_categories"
+              defaultValue={current?.data_categories.join(", ")}
+              placeholder="e.g. User queries, IP addresses, resumes"
+              className={inputClass}
+            />
+          </Field>
+
+          <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-2.5 pt-2 border-t border-zinc-800">
             {([
               ["personal_data_shared", "Receives personal data", current?.personal_data_shared],
-              ["contract_in_place", "Contract or data processing terms on record", current?.contract_in_place],
-              ["subprocessors_listed", "Sub-processors listed", current?.subprocessors_listed],
-              ["exit_plan", "Exit plan recorded", current?.exit_plan],
+              ["contract_in_place", "DPA / contract terms executed", current?.contract_in_place],
+              ["subprocessors_listed", "Sub-processors registered", current?.subprocessors_listed],
+              ["exit_plan", "Exit / migration plan exists", current?.exit_plan],
               ["outside_india", "Processes data outside India", current?.outside_india],
               ["outside_eea", "Processes data outside the EEA", current?.outside_eea],
             ] as const).map(([name, label, value]) => (
-              <label key={name} className="flex items-center gap-2 text-sm text-slate-200">
-                <input type="checkbox" name={name} defaultChecked={Boolean(value)} className={check} /> {label}
+              <label key={name} className="flex items-center gap-2 text-xs text-zinc-200 cursor-pointer">
+                <input type="checkbox" name={name} defaultChecked={Boolean(value)} className={check} />
+                <span>{label}</span>
               </label>
             ))}
           </div>
-          {error && <p role="alert" className="text-xs text-rose-300">{error}</p>}
-          <div className="flex gap-3">
-            <button type="submit" disabled={busy} className={buttonClass}>{busy ? "Saving..." : "Save vendor"}</button>
-            <button type="button" onClick={() => setEditing(null)} className={ghostButtonClass}>Cancel</button>
+
+          {error && (
+            <div role="alert" className="p-2.5 rounded-md border border-red-500/30 bg-red-500/10 text-xs text-red-200">
+              {error}
+            </div>
+          )}
+
+          <div className="flex items-center gap-3 pt-3 border-t border-zinc-800">
+            <button type="submit" disabled={busy} className={buttonClass}>
+              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+              <span>{busy ? "Saving vendor record..." : "Save Vendor Record"}</span>
+            </button>
+            <button type="button" onClick={() => setEditing(null)} className={ghostButtonClass}>
+              Cancel
+            </button>
           </div>
         </form>
       )}
-      {!editing && error && <p role="alert" className="text-xs text-rose-300">{error}</p>}
     </div>
   );
 }

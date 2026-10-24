@@ -21,57 +21,98 @@ export default async function SystemsPage() {
   }
 
   return (
-    <PageShell title="AI Systems" subtitle="The systems you audit, who owns them and who reviews them">
+    <PageShell
+      title="AI Systems Inventory"
+      subtitle="Registered machine learning models, algorithmic systems, ownership assignments, and audit logs"
+    >
       {failure && <ErrorState message={failure} />}
+
       {!failure && systems.length === 0 && (
-        <EmptyState title="No AI systems yet">
-          <p className="mb-3">Register your first system below, or load an example.</p>
-          <div className="flex flex-wrap items-center justify-center gap-3"><LoadSampleButton scenario="finsum" /><LoadSampleButton scenario="compas" /></div>
-        </EmptyState>
+        <EmptyState
+          title="No AI systems registered yet"
+          description="Register your AI system to begin running fairness audits, drift tracking, and DPDP/GDPR assessments, or seed a demonstration model."
+          action={
+            <div className="flex flex-wrap items-center justify-center gap-3 mt-2">
+              <LoadSampleButton scenario="finsum" label="Load FinSum Sample (LLM)" />
+              <LoadSampleButton scenario="compas" label="Load COMPAS Dataset (Classifier)" />
+            </div>
+          }
+        />
       )}
+
       {systems.length > 0 && (
-        <div className="glass-panel overflow-x-auto">
-          <table className="w-full text-sm">
-            <caption className="sr-only">Registered AI systems</caption>
-            <thead>
-              <tr className="text-left text-xs text-slate-400 border-b border-white/10">
-                <th scope="col" className="p-3 font-medium">System</th>
-                <th scope="col" className="p-3 font-medium">Owner</th>
-                <th scope="col" className="p-3 font-medium">Reviewer</th>
-                <th scope="col" className="p-3 font-medium">Latest audit</th>
-                <th scope="col" className="p-3 font-medium">Open findings</th>
-              </tr>
-            </thead>
-            <tbody>
-              {systems.map((s) => (
-                <tr key={s.id} className="border-b border-white/5">
-                  <td className="p-3">
-                    <Link href={`/systems/${s.id}`} className="font-semibold text-cyan-300 hover:text-cyan-200">
-                      {s.name}
-                    </Link>
-                    <div className="text-xs text-slate-500 max-w-md truncate">{s.purpose}</div>
-                  </td>
-                  <td className="p-3 text-slate-300">{s.owner_name ?? "Not assigned"}</td>
-                  <td className="p-3 text-slate-300">{s.reviewer_name ?? "Not assigned"}</td>
-                  <td className="p-3">
-                    {s.latest_run ? (
-                      <Link href={`/audits/${s.latest_run.id}`} className="inline-flex items-center gap-2">
-                        <StateBadge state={s.latest_run.status} />
-                        <span className="text-xs text-slate-400">{dateTime(s.latest_run.finished_at)}</span>
-                      </Link>
-                    ) : (
-                      <span className="text-xs text-slate-500">Never audited</span>
-                    )}
-                  </td>
-                  <td className="p-3 text-slate-300">{s.open_findings}</td>
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 overflow-hidden shadow-xs">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <caption className="sr-only">Registered AI systems inventory</caption>
+              <thead className="bg-zinc-900/80 text-xs font-medium text-zinc-400 border-b border-zinc-800">
+                <tr>
+                  <th scope="col" className="py-3 px-4">System Name & Purpose</th>
+                  <th scope="col" className="py-3 px-4">Type</th>
+                  <th scope="col" className="py-3 px-4">Owner</th>
+                  <th scope="col" className="py-3 px-4">Reviewer</th>
+                  <th scope="col" className="py-3 px-4">Latest Audit Run</th>
+                  <th scope="col" className="py-3 px-4 text-right">Open Findings</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-zinc-800/60">
+                {systems.map((s) => (
+                  <tr key={s.id} className="hover:bg-zinc-800/30 transition-colors">
+                    <td className="py-3.5 px-4 min-w-[240px]">
+                      <Link
+                        href={`/systems/${s.id}`}
+                        className="font-medium text-zinc-100 hover:text-white underline underline-offset-4 decoration-zinc-700 hover:decoration-zinc-300 transition-colors"
+                      >
+                        {s.name}
+                      </Link>
+                      <div className="text-xs text-zinc-400 max-w-sm truncate mt-0.5">{s.purpose}</div>
+                    </td>
+                    <td className="py-3.5 px-4 text-xs">
+                      <span className="font-mono bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800 text-zinc-300">
+                        {s.system_type === "llm" ? "LLM" : "Classifier"}
+                      </span>
+                    </td>
+                    <td className="py-3.5 px-4 text-xs text-zinc-300">
+                      {s.owner_name ?? <span className="text-zinc-500">Unassigned</span>}
+                    </td>
+                    <td className="py-3.5 px-4 text-xs text-zinc-300">
+                      {s.reviewer_name ?? <span className="text-zinc-500">Unassigned</span>}
+                    </td>
+                    <td className="py-3.5 px-4 text-xs">
+                      {s.latest_run ? (
+                        <Link
+                          href={`/audits/${s.latest_run.id}`}
+                          className="inline-flex items-center gap-2 hover:underline decoration-zinc-600"
+                        >
+                          <StateBadge state={s.latest_run.status} />
+                          <span className="text-zinc-400 tabular-nums">
+                            {dateTime(s.latest_run.finished_at)}
+                          </span>
+                        </Link>
+                      ) : (
+                        <span className="text-zinc-500">No audits run</span>
+                      )}
+                    </td>
+                    <td className="py-3.5 px-4 text-xs text-right tabular-nums">
+                      {s.open_findings > 0 ? (
+                        <span className="font-semibold text-amber-300">{s.open_findings}</span>
+                      ) : (
+                        <span className="text-zinc-500">0</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
+
       {!failure && (
-        <Panel title="Register an AI system">
+        <Panel
+          title="Register New AI System"
+          subtitle="Declare architectural type, human oversight roles, and statutory regulatory requirements"
+        >
           <SystemForm people={people} />
         </Panel>
       )}

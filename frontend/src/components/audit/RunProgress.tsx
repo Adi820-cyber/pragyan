@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { call, errText } from "@/lib/client/api";
 import { StateBadge } from "@/components/ui/StateBadge";
 import { ghostButtonClass } from "@/components/ui/Panel";
+import { Loader2 } from "lucide-react";
 import type { AuditRun } from "@/lib/types";
 
 export function RunProgress({ run: initial }: { run: AuditRun }) {
@@ -41,44 +42,48 @@ export function RunProgress({ run: initial }: { run: AuditRun }) {
   const active = run.status === "queued" || run.status === "running";
 
   return (
-    <div className="glass-panel p-6 space-y-4" role="status" aria-live="polite">
+    <div
+      className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-6 space-y-5"
+      role="status"
+      aria-live="polite"
+    >
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <StateBadge state={run.status} />
-          <span className="text-sm text-slate-200">{run.progress_message || "Waiting"}</span>
+          {active && <Loader2 className="w-4 h-4 animate-spin text-zinc-400" aria-hidden="true" />}
+          <span className="text-sm font-medium text-zinc-200">
+            {run.progress_message || (run.status === "queued" ? "Queued for audit pipeline" : "Evaluating checks...")}
+          </span>
         </div>
         {active && (
           <button type="button" onClick={cancel} className={ghostButtonClass}>
-            Cancel
+            Cancel run
           </button>
         )}
       </div>
+
       <div
-        className="h-2 rounded-full bg-slate-800 overflow-hidden"
+        className="h-2 rounded-full bg-zinc-800 overflow-hidden"
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={run.progress}
-        aria-label="Audit progress"
+        aria-valuenow={run.progress ?? 0}
       >
-        <div className="h-full bg-cyan-500 transition-all" style={{ width: `${run.progress}%` }} />
+        <div
+          className="h-full bg-zinc-100 transition-all duration-300"
+          style={{ width: `${Math.max(5, run.progress ?? 0)}%` }}
+        />
       </div>
-      {run.status === "queued" && (
-        <p className="text-xs text-slate-400">
-          Waiting for the audit worker. If this stays queued, start it with <code className="text-cyan-300">uv run python manage.py run_audit_worker</code> in the backend folder.
-        </p>
-      )}
-      {run.status === "failed" && (
-        <p role="alert" className="text-sm text-rose-300">
-          The audit did not finish. {run.error}
-        </p>
-      )}
-      {run.status === "cancelled" && <p className="text-sm text-slate-300">This audit was cancelled. No results were saved.</p>}
+
       {error && (
-        <p role="alert" className="text-xs text-rose-300">
+        <p role="alert" className="text-xs text-red-400">
           {error}
         </p>
       )}
+
+      <p className="text-xs text-zinc-400">
+        Checks run in the background. Fairness gaps, drift metrics, and explanation metrics will appear here once complete.
+      </p>
     </div>
   );
 }

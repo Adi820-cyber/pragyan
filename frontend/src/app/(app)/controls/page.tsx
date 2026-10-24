@@ -28,29 +28,70 @@ export default async function ControlsPage({ searchParams }: PageProps<"/control
   }
 
   return (
-    <PageShell title="Privacy & Controls" subtitle="DPDP and GDPR readiness: what evidence exists and who reviewed it">
+    <PageShell
+      title="Privacy & Governance Controls"
+      subtitle="DPDP and GDPR readiness verification: evidence traceability, sign-offs, and compliance posture"
+    >
       {failure && <ErrorState message={failure} />}
-      {!failure && systems.length === 0 && <EmptyState title="No AI systems yet">Register a system to get its privacy checklist.</EmptyState>}
-      {systems.length > 0 && (
-        <nav aria-label="Choose a system" className="flex flex-wrap gap-2">
-          {systems.map((s) => (
+
+      {!failure && systems.length === 0 && (
+        <EmptyState
+          title="No active AI systems registered"
+          description="Register an AI system to generate its regulatory privacy checklist under India DPDP and EU GDPR."
+          action={
             <Link
-              key={s.id}
-              href={`/controls?system=${s.id}`}
-              aria-current={s.id === current?.id ? "page" : undefined}
-              className={`rounded-full px-3 py-1 text-xs border ${s.id === current?.id ? "border-cyan-500/50 bg-cyan-500/15 text-cyan-200" : "border-white/10 text-slate-300 hover:bg-white/5"}`}
+              href="/systems"
+              className="inline-flex items-center gap-1.5 text-xs font-semibold px-3.5 py-2 rounded-md bg-zinc-100 hover:bg-white text-zinc-900 transition-colors"
             >
-              {s.name}
+              Register system
             </Link>
-          ))}
-        </nav>
+          }
+        />
       )}
-      {current && assessments.length === 0 && (
-        <EmptyState title="No checklist selected for this system">
-          Edit the system to choose India DPDP, EU GDPR, or both.
-        </EmptyState>
+
+      {systems.length > 0 && (
+        <div className="space-y-4">
+          <nav aria-label="System selector" className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium text-zinc-400 mr-1">System:</span>
+            {systems.map((s) => {
+              const isSelected = s.id === current?.id;
+              return (
+                <Link
+                  key={s.id}
+                  href={`/controls?system=${s.id}`}
+                  aria-current={isSelected ? "page" : undefined}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 ${
+                    isSelected
+                      ? "border-zinc-500 bg-zinc-800 text-zinc-100 shadow-xs"
+                      : "border-zinc-800 bg-zinc-900/50 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700"
+                  }`}
+                >
+                  {s.name}
+                </Link>
+              );
+            })}
+          </nav>
+
+          {current && assessments.length === 0 && (
+            <EmptyState
+              title="No control frameworks enabled for this system"
+              description="Edit this system to enable the India DPDP Act 2023, EU GDPR, or both control packs."
+              action={
+                <Link
+                  href={`/systems/${current.id}`}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold px-3.5 py-2 rounded-md bg-zinc-100 hover:bg-white text-zinc-900 transition-colors"
+                >
+                  Configure system checklists
+                </Link>
+              }
+            />
+          )}
+
+          {current && assessments.length > 0 && (
+            <ControlsBoard assessments={assessments} packs={packs} role={role} />
+          )}
+        </div>
       )}
-      {current && assessments.length > 0 && <ControlsBoard assessments={assessments} packs={packs} role={role} />}
     </PageShell>
   );
 }

@@ -11,7 +11,7 @@ const ROWS: { key: string; label: string }[] = [
 ];
 
 export function GroundingView({ results }: { results: CheckResult[] }) {
-  if (results.length === 0) return <p className="text-sm text-slate-400">Groundedness was not part of this run.</p>;
+  if (results.length === 0) return <p className="text-sm text-zinc-500">Groundedness was not part of this run.</p>;
   const order = ["reference", "current"];
   const periods = Array.from(new Set(results.map((r) => r.subject).filter(Boolean))).sort((a, b) => order.indexOf(a) - order.indexOf(b));
   const lowest = results.find((r) => r.check_key === "groundedness" && Array.isArray(r.detail.lowest_rows));
@@ -19,42 +19,42 @@ export function GroundingView({ results }: { results: CheckResult[] }) {
 
   return (
     <div className="space-y-6">
-      <p className="text-xs text-slate-400">
+      <p className="text-xs text-zinc-400 leading-relaxed">
         Groundedness here is lexical: it measures how much of an answer&apos;s content also appears in the source it was given, and whether it states figures that appear nowhere in the source or prompt.
-        It tells you which answers to read. It does not prove an answer is true or false, and an answer can be wrong while using the source&apos;s words.
+        It identifies which answers require manual review. It does not prove an answer is factually correct or incorrect.
       </p>
       {notAssessed.map((r) => <ResultCard key={r.id} r={r} />)}
 
       {periods.length > 0 && (
-        <div className="glass-panel overflow-x-auto">
+        <div className="rounded-md border border-zinc-800 bg-zinc-900/40 overflow-x-auto">
           <table className="w-full text-xs">
             <caption className="sr-only">Groundedness measures for each period</caption>
             <thead>
-              <tr className="text-left text-slate-400 border-b border-white/10">
-                <th scope="col" className="p-2 font-medium">Measure</th>
-                {periods.map((p) => <th key={p} scope="col" className="p-2 font-medium capitalize">{p}</th>)}
+              <tr className="text-left text-zinc-400 border-b border-zinc-800 bg-zinc-900/60">
+                <th scope="col" className="p-3 font-medium">Measure</th>
+                {periods.map((p) => <th key={p} scope="col" className="p-3 font-medium capitalize">{p}</th>)}
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-zinc-800/60">
               {ROWS.map((row) => (
-                <tr key={row.key} className="border-b border-white/5 align-top">
-                  <th scope="row" className="p-2 text-left font-medium text-slate-100">{row.label}</th>
+                <tr key={row.key} className="align-top hover:bg-zinc-800/20 transition-colors">
+                  <th scope="row" className="p-3 text-left font-medium text-zinc-200">{row.label}</th>
                   {periods.map((p) => {
                     const r = results.find((x) => x.check_key === row.key && x.subject === p);
                     return (
-                      <td key={p} className="p-2">
+                      <td key={p} className="p-3">
                         {r && r.value !== null ? (
                           <>
-                            <div className="text-slate-100 text-sm">{formatValue(r)}</div>
+                            <div className="text-zinc-100 text-sm font-medium tabular-nums">{formatValue(r)}</div>
                             {r.ci_low !== null && r.ci_high !== null && (
-                              <div className="text-slate-500">95% interval {formatValue({ ...r, value: r.ci_low })} to {formatValue({ ...r, value: r.ci_high })}</div>
+                              <div className="text-zinc-500 tabular-nums mt-0.5">95% interval {formatValue({ ...r, value: r.ci_low })} to {formatValue({ ...r, value: r.ci_high })}</div>
                             )}
-                            <div className="mt-1"><StateBadge state={r.state} /></div>
+                            <div className="mt-1.5"><StateBadge state={r.state} /></div>
                           </>
                         ) : r ? (
                           <StateBadge state={r.state} />
                         ) : (
-                          <span className="text-slate-500">n/a</span>
+                          <span className="text-zinc-500">n/a</span>
                         )}
                       </td>
                     );
@@ -71,14 +71,15 @@ export function GroundingView({ results }: { results: CheckResult[] }) {
       </div>
 
       {lowest && (
-        <div className="rounded-lg border border-white/10 bg-slate-900/50 p-4 text-xs text-slate-300">
-          <h3 className="font-semibold text-slate-100 mb-1">Where to look first</h3>
-          <p>
-            The lowest-overlap answers in the {lowest.subject} data are rows {(lowest.detail.lowest_rows as number[]).slice(0, 10).map((n) => n + 1).join(", ")} of your file (counting from 1).
-            Their text is not stored in Reskure: open them in your own log.
+        <div className="rounded-md border border-zinc-800 bg-zinc-900/40 p-4 text-xs text-zinc-300">
+          <h3 className="font-semibold text-zinc-100 mb-1">Target Inspection Points</h3>
+          <p className="leading-relaxed">
+            The lowest-overlap answers in the {lowest.subject} data are rows <span className="font-mono text-zinc-200">{(lowest.detail.lowest_rows as number[]).slice(0, 10).map((n) => n + 1).join(", ")}</span> of your file (counting from 1).
+            Their text is not stored in Reskure: inspect them directly in your telemetry log.
           </p>
         </div>
       )}
     </div>
   );
 }
+

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Loader2 } from "lucide-react";
 import { call, errText } from "@/lib/client/api";
 import { StateBadge } from "@/components/ui/StateBadge";
 import { Field, buttonClass, ghostButtonClass, inputClass } from "@/components/ui/Panel";
@@ -69,42 +70,58 @@ export function RightsPanel({
 
   return (
     <div className="space-y-4">
-      <p className="text-xs text-slate-400">
-        For each right, record how a person makes the request, who answers it, when you last tested it, and how many requests were closed on time. The audit flags missing procedures,
-        untested ones and slow responses. {tracked ? "" : "Select a privacy checklist (DPDP or GDPR) in Settings for these to be assessed."}
+      <p className="text-xs text-zinc-400">
+        Traceability for statutory data-subject requests (access, correction, erasure, grievance, and human review under DPDP/GDPR). Audits evaluate missing procedures, untested SLA channels, and response lag.
       </p>
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <caption className="sr-only">Data-subject rights handling</caption>
-          <thead>
-            <tr className="text-left text-slate-400 border-b border-white/10">
-              <th scope="col" className="p-2 font-medium">Right</th>
-              <th scope="col" className="p-2 font-medium">Procedure</th>
-              <th scope="col" className="p-2 font-medium">Owner</th>
-              <th scope="col" className="p-2 font-medium">Last tested</th>
-              <th scope="col" className="p-2 font-medium">Requests (on time)</th>
-              <th scope="col" className="p-2 font-medium"><span className="sr-only">Actions</span></th>
+
+      <div className="rounded-md border border-zinc-800 bg-zinc-900/40 overflow-hidden">
+        <table className="w-full text-xs text-left">
+          <caption className="sr-only">Data subject rights procedures</caption>
+          <thead className="bg-zinc-900/80 text-zinc-400 font-medium border-b border-zinc-800">
+            <tr>
+              <th scope="col" className="py-2.5 px-3">Statutory Right</th>
+              <th scope="col" className="py-2.5 px-3">Procedure Status</th>
+              <th scope="col" className="py-2.5 px-3">Owner</th>
+              <th scope="col" className="py-2.5 px-3">Last Tested</th>
+              <th scope="col" className="py-2.5 px-3">Requests (Closed On Time)</th>
+              <th scope="col" className="py-2.5 px-3 text-right">Action</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="divide-y divide-zinc-800/60">
             {ALL_RIGHTS.map((r) => {
               const p = byRight.get(r);
               const need = required(r);
               return (
-                <tr key={r} className="border-b border-white/5 text-slate-200">
-                  <th scope="row" className="p-2 text-left font-medium">
-                    {RIGHT_LABEL[r]}
-                    {!need && tracked && <span className="block text-[11px] text-slate-500 font-normal">Not required: system does not make automated decisions</span>}
+                <tr key={r} className="hover:bg-zinc-800/20 transition-colors">
+                  <th scope="row" className="py-2.5 px-3 text-left font-medium text-zinc-100">
+                    <div>{RIGHT_LABEL[r]}</div>
+                    {!need && tracked && (
+                      <span className="text-[10px] text-zinc-500 font-normal block">
+                        Exempt: System does not conduct automated profiling
+                      </span>
+                    )}
                   </th>
-                  <td className="p-2">
-                    {p?.procedure_exists ? <StateBadge state="no_alert" label="Recorded" /> : need ? <StateBadge state="review_required" label="Missing" /> : <span className="text-slate-500">n/a</span>}
+                  <td className="py-2.5 px-3">
+                    {p?.procedure_exists ? (
+                      <StateBadge state="no_alert" label="Procedure on record" />
+                    ) : need ? (
+                      <StateBadge state="review_required" label="Missing procedure" />
+                    ) : (
+                      <span className="text-zinc-500 font-mono text-[11px]">—</span>
+                    )}
                   </td>
-                  <td className="p-2">{p?.owner_name ?? "None"}</td>
-                  <td className="p-2">{dateOnly(p?.last_tested)}</td>
-                  <td className="p-2">{p ? `${p.requests_12m} (${p.closed_on_time_12m})` : "n/a"}</td>
-                  <td className="p-2">
+                  <td className="py-2.5 px-3 text-zinc-300">{p?.owner_name ?? <span className="text-zinc-500">None</span>}</td>
+                  <td className="py-2.5 px-3 text-zinc-400 tabular-nums">{dateOnly(p?.last_tested)}</td>
+                  <td className="py-2.5 px-3 text-zinc-300 tabular-nums">
+                    {p ? `${p.requests_12m} (${p.closed_on_time_12m} on time)` : <span className="text-zinc-500">—</span>}
+                  </td>
+                  <td className="py-2.5 px-3 text-right">
                     {editable && (
-                      <button type="button" onClick={() => setEditing(r)} className="text-cyan-300 hover:text-cyan-200 underline">
+                      <button
+                        type="button"
+                        onClick={() => setEditing(r)}
+                        className="text-xs font-medium text-zinc-300 hover:text-white underline underline-offset-2 cursor-pointer"
+                      >
                         {p ? "Edit" : "Record"}
                       </button>
                     )}
@@ -115,31 +132,122 @@ export function RightsPanel({
           </tbody>
         </table>
       </div>
+
       {editing && (
-        <form key={editing} onSubmit={save} className="rounded-lg border border-white/10 p-4 space-y-4">
-          <h3 className="text-sm font-bold text-white">{RIGHT_LABEL[editing]}</h3>
-          <label className="flex items-center gap-2 text-sm text-slate-200">
-            <input type="checkbox" name="procedure_exists" defaultChecked={current?.procedure_exists ?? true} className="h-4 w-4 accent-cyan-500" />
-            A working procedure exists
+        <form
+          key={editing}
+          onSubmit={save}
+          className="rounded-md border border-zinc-800 bg-zinc-900/60 p-5 space-y-4 shadow-sm"
+        >
+          <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+            <h4 className="text-sm font-semibold text-zinc-100">
+              Configure Procedure: {RIGHT_LABEL[editing]}
+            </h4>
+            <button
+              type="button"
+              onClick={() => setEditing(null)}
+              className="text-xs text-zinc-400 hover:text-zinc-200 cursor-pointer"
+            >
+              Cancel
+            </button>
+          </div>
+
+          <label className="flex items-center gap-2 text-xs font-medium text-zinc-200 cursor-pointer">
+            <input
+              type="checkbox"
+              name="procedure_exists"
+              defaultChecked={current?.procedure_exists ?? true}
+              className="rounded border-zinc-700 bg-zinc-900 text-zinc-100"
+            />
+            <span>Documented & operational procedure exists in organization</span>
           </label>
+
           <div className="grid md:grid-cols-3 gap-4">
-            <Field label="Owner" htmlFor="r_owner">
+            <Field label="Procedure Owner" htmlFor="r_owner">
               <select id="r_owner" name="owner" defaultValue={current?.owner ?? ""} className={inputClass}>
                 <option value="">None</option>
-                {people.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                {people.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
               </select>
             </Field>
-            <Field label="Where people make the request" htmlFor="r_channel"><input id="r_channel" name="channel" defaultValue={current?.channel} className={inputClass} /></Field>
-            <Field label="Promised response time (days)" htmlFor="r_sla"><input id="r_sla" name="sla_days" type="number" min={1} defaultValue={current?.sla_days ?? ""} className={inputClass} /></Field>
-            <Field label="Last tested" htmlFor="r_tested" hint="Date you last ran a sample request through it."><input id="r_tested" name="last_tested" type="date" defaultValue={current?.last_tested ?? ""} className={inputClass} /></Field>
-            <Field label="Requests in the last 12 months" htmlFor="r_n"><input id="r_n" name="requests_12m" type="number" min={0} defaultValue={current?.requests_12m ?? 0} className={inputClass} /></Field>
-            <Field label="Closed on time" htmlFor="r_ok"><input id="r_ok" name="closed_on_time_12m" type="number" min={0} defaultValue={current?.closed_on_time_12m ?? 0} className={inputClass} /></Field>
+            <Field label="Intake Channel / Endpoint" htmlFor="r_channel">
+              <input
+                id="r_channel"
+                name="channel"
+                defaultValue={current?.channel}
+                placeholder="e.g. privacy@reskure.net or /privacy/portal"
+                className={inputClass}
+              />
+            </Field>
+            <Field label="Statutory SLA Target (Days)" htmlFor="r_sla">
+              <input
+                id="r_sla"
+                name="sla_days"
+                type="number"
+                min={1}
+                defaultValue={current?.sla_days ?? ""}
+                placeholder="e.g. 30"
+                className={inputClass}
+              />
+            </Field>
+            <Field label="Last Drill / Simulation Date" htmlFor="r_tested" hint="Date last synthetic request tested channel.">
+              <input
+                id="r_tested"
+                name="last_tested"
+                type="date"
+                defaultValue={current?.last_tested ?? ""}
+                className={inputClass}
+              />
+            </Field>
+            <Field label="Total Requests (Last 12 Mos)" htmlFor="r_n">
+              <input
+                id="r_n"
+                name="requests_12m"
+                type="number"
+                min={0}
+                defaultValue={current?.requests_12m ?? 0}
+                className={inputClass}
+              />
+            </Field>
+            <Field label="Requests Closed Within SLA" htmlFor="r_ok">
+              <input
+                id="r_ok"
+                name="closed_on_time_12m"
+                type="number"
+                min={0}
+                defaultValue={current?.closed_on_time_12m ?? 0}
+                className={inputClass}
+              />
+            </Field>
           </div>
-          <Field label="Notes on evidence" htmlFor="r_note"><input id="r_note" name="evidence_note" defaultValue={current?.evidence_note} className={inputClass} /></Field>
-          {error && <p role="alert" className="text-xs text-rose-300">{error}</p>}
-          <div className="flex gap-3">
-            <button type="submit" disabled={busy} className={buttonClass}>{busy ? "Saving..." : "Save"}</button>
-            <button type="button" onClick={() => setEditing(null)} className={ghostButtonClass}>Cancel</button>
+
+          <Field label="Procedure Documentation Reference" htmlFor="r_note">
+            <input
+              id="r_note"
+              name="evidence_note"
+              defaultValue={current?.evidence_note}
+              placeholder="e.g. SOP-DSR-04 in corporate policy repository"
+              className={inputClass}
+            />
+          </Field>
+
+          {error && (
+            <div role="alert" className="p-2.5 rounded-md border border-red-500/30 bg-red-500/10 text-xs text-red-200">
+              {error}
+            </div>
+          )}
+
+          <div className="flex items-center gap-3 pt-3 border-t border-zinc-800">
+            <button type="submit" disabled={busy} className={buttonClass}>
+              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+              <span>{busy ? "Saving procedure..." : "Save Procedure"}</span>
+            </button>
+            <button type="button" onClick={() => setEditing(null)} className={ghostButtonClass}>
+              Cancel
+            </button>
           </div>
         </form>
       )}

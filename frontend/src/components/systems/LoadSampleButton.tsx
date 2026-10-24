@@ -2,11 +2,17 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { FlaskConical } from "lucide-react";
+import { FlaskConical, Loader2 } from "lucide-react";
 import { call, errText } from "@/lib/client/api";
-import { buttonClass } from "@/components/ui/Panel";
+import { ghostButtonClass } from "@/components/ui/Panel";
 
-export function LoadSampleButton({ scenario = "finsum", label }: { scenario?: "finsum" | "compas"; label?: string }) {
+export function LoadSampleButton({
+  scenario = "finsum",
+  label,
+}: {
+  scenario?: "finsum" | "compas";
+  label?: string;
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,14 +30,26 @@ export function LoadSampleButton({ scenario = "finsum", label }: { scenario?: "f
     }
   }
 
+  const defaultLabel =
+    scenario === "compas" ? "Load COMPAS Example (Classifier)" : "Load FinSum Sample (LLM)";
+
   return (
-    <div className="inline-flex flex-col items-center gap-2">
-      <button type="button" onClick={load} disabled={busy} className={buttonClass}>
-        <FlaskConical className="w-4 h-4" aria-hidden="true" />
-        {busy ? "Loading..." : (label ?? (scenario === "compas" ? "Load a real-data example (COMPAS)" : "Load the LLM sample (FinSum)"))}
+    <div className="inline-flex flex-col items-start gap-1.5">
+      <button
+        type="button"
+        onClick={load}
+        disabled={busy}
+        className={ghostButtonClass}
+      >
+        {busy ? (
+          <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+        ) : (
+          <FlaskConical className="w-3.5 h-3.5 text-zinc-400" aria-hidden="true" />
+        )}
+        <span>{busy ? "Seeding dataset..." : label ?? defaultLabel}</span>
       </button>
       {error && (
-        <p role="alert" className="text-xs text-rose-300">
+        <p role="alert" className="text-xs text-red-400">
           {error}
         </p>
       )}

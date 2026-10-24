@@ -4,16 +4,16 @@ import type { ComponentType } from "react";
 type Tone = "ok" | "warn" | "bad" | "muted" | "info";
 
 const TONES: Record<Tone, string> = {
-  ok: "bg-emerald-500/10 text-emerald-300 border-emerald-500/30",
-  warn: "bg-amber-500/10 text-amber-300 border-amber-500/30",
-  bad: "bg-rose-500/10 text-rose-300 border-rose-500/30",
-  muted: "bg-slate-500/10 text-slate-300 border-slate-500/30",
-  info: "bg-sky-500/10 text-sky-300 border-sky-500/30",
+  ok: "bg-emerald-950/50 text-emerald-300 border-emerald-800/60",
+  warn: "bg-amber-950/50 text-amber-300 border-amber-800/60",
+  bad: "bg-red-950/50 text-red-300 border-red-800/60",
+  muted: "bg-zinc-900 text-zinc-300 border-zinc-700/80",
+  info: "bg-blue-950/50 text-blue-300 border-blue-800/60",
 };
 
 const MAP: Record<string, { label: string; tone: Tone; icon: ComponentType<{ className?: string }> }> = {
   // check results
-  no_alert: { label: "No alert under policy", tone: "ok", icon: CheckCircle2 },
+  no_alert: { label: "No alert", tone: "ok", icon: CheckCircle2 },
   review_required: { label: "Review required", tone: "warn", icon: AlertTriangle },
   insufficient_evidence: { label: "Insufficient evidence", tone: "muted", icon: HelpCircle },
   not_applicable: { label: "Not assessed", tone: "muted", icon: CircleSlash },
@@ -49,9 +49,11 @@ export function StateBadge({ state, label }: { state: string; label?: string }) 
   const entry = MAP[state] ?? { label: state, tone: "muted" as Tone, icon: HelpCircle };
   const Icon = entry.icon;
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap ${TONES[entry.tone]}`}>
-      <Icon className={`w-3 h-3 ${state === "running" ? "animate-spin" : ""}`} aria-hidden="true" />
-      {label ?? entry.label}
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs font-medium whitespace-nowrap leading-none ${TONES[entry.tone]}`}
+    >
+      <Icon className={`w-3 h-3 shrink-0 ${state === "running" ? "animate-spin" : ""}`} aria-hidden="true" />
+      <span>{label ?? entry.label}</span>
     </span>
   );
 }

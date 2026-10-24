@@ -2,14 +2,20 @@
 
 import { useActionState } from "react";
 import { login } from "./actions";
+import { Loader2 } from "lucide-react";
+import { buttonClass, inputClass } from "@/components/ui/Panel";
 
 export function LoginForm() {
   const [state, action, pending] = useActionState(login, undefined);
 
   return (
-    <form action={action} className="glass-panel p-6 space-y-4" aria-describedby={state?.error ? "login-error" : undefined}>
-      <div>
-        <label htmlFor="username" className="block text-xs font-medium text-slate-300 mb-1">
+    <form
+      action={action}
+      className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-6 space-y-4 shadow-xs"
+      aria-describedby={state?.error ? "login-error" : undefined}
+    >
+      <div className="space-y-1.5">
+        <label htmlFor="username" className="block text-xs font-medium text-zinc-300">
           Username
         </label>
         <input
@@ -17,11 +23,14 @@ export function LoginForm() {
           name="username"
           autoComplete="username"
           required
-          className="w-full rounded-lg bg-slate-900 border border-white/10 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
+          disabled={pending}
+          placeholder="admin"
+          className={inputClass}
         />
       </div>
-      <div>
-        <label htmlFor="password" className="block text-xs font-medium text-slate-300 mb-1">
+
+      <div className="space-y-1.5">
+        <label htmlFor="password" className="block text-xs font-medium text-zinc-300">
           Password
         </label>
         <input
@@ -30,20 +39,31 @@ export function LoginForm() {
           type="password"
           autoComplete="current-password"
           required
-          className="w-full rounded-lg bg-slate-900 border border-white/10 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
+          disabled={pending}
+          placeholder="••••••••"
+          className={inputClass}
         />
       </div>
+
       {state?.error && (
-        <p id="login-error" role="alert" className="text-xs text-rose-300">
+        <div id="login-error" role="alert" className="p-3 rounded-md border border-red-500/30 bg-red-500/10 text-xs text-red-200">
           {state.error}
-        </p>
+        </div>
       )}
+
       <button
         type="submit"
         disabled={pending}
-        className="w-full rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-60 text-white text-sm font-semibold py-2 transition-colors focus:outline-none focus:ring-2 focus:ring-cyan-300"
+        className={`w-full ${buttonClass}`}
       >
-        {pending ? "Signing in..." : "Sign in"}
+        {pending ? (
+          <>
+            <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+            <span>Signing in...</span>
+          </>
+        ) : (
+          <span>Sign in</span>
+        )}
       </button>
     </form>
   );
