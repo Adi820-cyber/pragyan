@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Activity, AlertTriangle, ClipboardList, Clock, Hourglass, Plus } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, ClipboardList, Clock, Hourglass, Plus, UserCheck, UserX } from "lucide-react";
 import { PageShell } from "@/components/layout/PageShell";
 import { CoverageStrip } from "@/components/audit/CoverageStrip";
 import { LoadSampleButton } from "@/components/systems/LoadSampleButton";
@@ -54,6 +54,12 @@ export default async function OverviewPage() {
             <Stat label="Awaiting review" value={data.totals.awaiting_review} hint="submitted by an owner" icon={Hourglass} />
             <Stat label="Overdue" value={data.totals.overdue_findings} hint="past their due date" icon={Clock} />
             <Stat label="Control gaps" value={data.totals.control_gaps} hint="privacy items needing evidence" icon={ClipboardList} />
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <Stat label="Unassigned" value={data.totals.unassigned_findings} hint="open findings with no owner" icon={UserX} />
+            <Stat label="Assigned to me" value={data.totals.my_open_actions} hint={`${data.totals.my_overdue_actions} overdue`} icon={UserCheck} />
+            <Stat label="Needs my review" value={data.totals.awaiting_my_review} hint="fixed by someone else" icon={Hourglass} />
+            <Stat label="Closed" value={data.totals.closed_findings} hint="resolved or risk accepted" icon={CheckCircle2} />
           </div>
 
           {data.totals.active_runs > 0 && (

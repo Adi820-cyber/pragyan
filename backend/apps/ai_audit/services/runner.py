@@ -321,7 +321,7 @@ def _persist(run: AuditRun, results: list[Result]) -> None:
                 tenant_id=run.tenant_id, system=run.system, run=run, category=key[0],
                 fingerprint=":".join(str(k) for k in key), title=_title(key, rs), plain_language=text,
                 next_step=NEXT_STEPS.get((key[0], key[1]), "Review the evidence and decide on an action."),
-                severity=_severity(worst), owner=run.system.owner,
+                severity=_severity(worst),
             )
             finding.results.set([p[1] for p in pairs])
             FindingEvent.all_objects.create(tenant_id=run.tenant_id, finding=finding, actor=None, action="created",
