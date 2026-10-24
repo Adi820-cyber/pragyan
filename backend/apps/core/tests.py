@@ -129,9 +129,18 @@ class ReskureApiEndpointsTest(TestCase):
         self.tenant = Tenant.objects.create(name="Acme Test Tenant", slug="acme-test")
         set_current_tenant_id(self.tenant.id)
 
-        self.admin = Membership.objects.create(
-            tenant=self.tenant, email="admin@acme-test.com", role="TENANT_ADMIN"
+        from django.contrib.auth import get_user_model
+
+        user = get_user_model().objects.create_user(
+            username="admin@acme-test.com", email="admin@acme-test.com", password="Test-pass-123456"
         )
+        self.admin = Membership.objects.create(
+            tenant=self.tenant, email="admin@acme-test.com", role="TENANT_ADMIN", user=user
+        )
+        login = self.client.post(
+            "/api/v1/auth/login/", {"username": "admin@acme-test.com", "password": "Test-pass-123456"}, format="json"
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {login.json()['token']}")
 
         # Framework and control
         self.framework = Framework.objects.create(
@@ -196,12 +205,10 @@ class ReskureApiEndpointsTest(TestCase):
             data={
                 "action_type": "ISOLATE_HOST",
                 "target_identifier": "i-0123456789abcdef0",
-                "auto_approve": False,
-                "requested_by_id": str(self.admin.id),
+                "auto_approve": True,  # ignored: auto-approval is never client-controlled
             },
             format="json",
             HTTP_X_TENANT_ID=str(self.tenant.id),
-            HTTP_X_ACTOR_ID=str(self.admin.id),
         )
         self.assertEqual(response.status_code, 201)
         data = response.json()

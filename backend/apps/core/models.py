@@ -1,4 +1,5 @@
 import uuid
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
 from apps.core.context import get_current_tenant_id
@@ -126,6 +127,14 @@ class Membership(TenantScopedModel):
         ("CUSTOM", "Custom Role"),
     ]
 
+    # Login identity bound to this membership. A user may belong to several tenants.
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reskure_memberships",
+    )
     email = models.EmailField(db_index=True)
     full_name = models.CharField(max_length=255, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="ACTIVE")

@@ -33,17 +33,22 @@ class ApprovalRequestViewSet(viewsets.ModelViewSet):
         if not pending_step:
             return Response({"error": "No pending steps found for this approval request."}, status=status.HTTP_400_BAD_REQUEST)
 
-        decision_value = request.data.get("decision", "APPROVE").upper()
+        decision_value = str(request.data.get("decision", "APPROVE")).upper()
+        if decision_value not in ("APPROVE", "REJECT"):
+            return Response({"error": "decision must be APPROVE or REJECT."}, status=status.HTTP_400_BAD_REQUEST)
         comments = request.data.get("comments", "")
-        approver_id = request.data.get("approver_id")
 
-        if approver_id:
-            approver = Membership.objects.filter(id=approver_id, tenant_id=approval_req.tenant_id).first()
-        else:
-            approver = getattr(request, "membership", None)
-
-        if not approver:
-            return Response({"error": "Valid approver membership required."}, status=status.HTTP_400_BAD_REQUEST)
+        # The approver is always the authenticated caller; never taken from the request body.
+        approver = getattr(request, "membership", None)
+        if not approver or approver.tenant_id != approval_req.tenant_id:
+            return Response({"error": "Valid approver membership required."}, status=status.HTTP_403_FORBIDDEN)
+        if approval_req.requester_id and approval_req.requester_id == approver.id:
+            return Response(
+                {"error": "Segregation of Duties: requester cannot approve their own request."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if pending_step.decisions.filter(approver=approver).exists():
+            return Response({"error": "You have already decided on this step."}, status=status.HTTP_409_CONFLICT)
 
         try:
             decision_obj = ApprovalDecision.objects.create(

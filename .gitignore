@@ -11,7 +11,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+/lib/
+backend/**/lib/
 lib64/
 parts/
 sdist/
@@ -33,6 +34,7 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 media/
+private_media/
 staticfiles/
 
 # Environment Variables

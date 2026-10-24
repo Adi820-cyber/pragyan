@@ -26,7 +26,17 @@ class HasReskurePermission(BasePermission):
             resource_name = getattr(view, "resource_name", "general")
             permission_code = f"{resource_name}.{action_map.get(request.method, 'read')}"
 
-        actor = getattr(request, "membership", request.user)
+        actor = getattr(request, "membership", None)
+
+        # A client may not write rows into a tenant other than its own.
+        if actor is not None and request.method in ("POST", "PUT", "PATCH"):
+            data = request.data if hasattr(request.data, "get") else {}
+            for key in ("tenant", "tenant_id"):
+                supplied = data.get(key)
+                if supplied and str(supplied) != str(actor.tenant_id):
+                    self.message = "Cross-tenant write rejected."
+                    return False
+
         decision = PolicyEngine.evaluate(actor, permission_code, context={"ip": request.META.get("REMOTE_ADDR")})
         self.message = decision.reason
         return decision.allowed
@@ -41,7 +51,7 @@ class HasReskurePermission(BasePermission):
         resource_name = getattr(view, "resource_name", obj.__class__.__name__.lower())
         permission_code = f"{resource_name}.{action_map.get(request.method, 'read')}"
 
-        actor = getattr(request, "membership", request.user)
+        actor = getattr(request, "membership", None)
         decision = PolicyEngine.evaluate(actor, permission_code, resource=obj, context={"ip": request.META.get("REMOTE_ADDR")})
         self.message = decision.reason
         return decision.allowed

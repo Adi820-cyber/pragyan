@@ -1,0 +1,121 @@
+{
+  "pack_id": "dpdp_2025_v1",
+  "version": "1.0",
+  "title": "India DPDP readiness checklist",
+  "jurisdiction": "DPDP",
+  "legal_review_status": "Plain-language aid prepared from the official texts. Not reviewed by counsel and not legal advice. Have a qualified professional confirm applicability and wording before relying on any item as an obligation for your organisation.",
+  "effective_status_note": "The Digital Personal Data Protection Act, 2023 and the DPDP Rules, 2025 commence in phases under the MeitY commencement notification of November 2025. Confirm whether a provision is in force on your assessment date; this checklist records readiness, not a current legal duty.",
+  "sources": [
+    {"label": "DPDP Act, 2023 (MeitY)", "url": "https://www.meity.gov.in/static/uploads/2024/06/2bf1f0e9f04e6fb4f8fef35e82c42aa5.pdf"},
+    {"label": "Commencement notification, November 2025", "url": "https://www.meity.gov.in/static/uploads/2025/11/c56ceae6c383460ca69577428d36828b.pdf"},
+    {"label": "DPDP Rules, 2025 (final)", "url": "https://www.meity.gov.in/static/uploads/2025/11/53450e6e5dc0bfa85ebd78686cadad39.pdf"},
+    {"label": "December 2025 corrigendum", "url": "https://www.meity.gov.in/static/uploads/2025/12/3c7ebbae0e5456f493f486e6845df86b.pdf"}
+  ],
+  "controls": [
+    {
+      "id": "DPDP-01",
+      "title": "Notice to the people whose data you process",
+      "source": "DPDP Act 2023, s.5",
+      "question": "Do you collect personal data from individuals that is used to build, test or run this AI system?",
+      "requirement": "People are told what personal data is processed, for what purpose, how to exercise their rights and how to complain.",
+      "required_evidence": ["Copy of the notice shown to individuals", "Where and when it is shown"],
+      "guidance": "A short, plain notice linked from the point of data collection is the usual starting evidence."
+    },
+    {
+      "id": "DPDP-02",
+      "title": "Lawful ground: consent or a specified legitimate use",
+      "source": "DPDP Act 2023, ss.6-7",
+      "question": "For each purpose this system serves, which ground applies: consent, or a legitimate use listed in the Act?",
+      "requirement": "Each purpose has a documented ground. Consent, where relied on, is specific and can be withdrawn.",
+      "required_evidence": ["Purpose-to-ground mapping", "Consent record or process description"],
+      "guidance": "Do not assume consent is needed for everything, and do not assume a legitimate use applies without checking the Act."
+    },
+    {
+      "id": "DPDP-03",
+      "title": "Only the data needed for the stated purpose",
+      "source": "DPDP Act 2023, s.6(1)",
+      "question": "Does the model or the audit data include personal fields that are not needed for the purpose?",
+      "requirement": "Personal data processed is limited to what is necessary for the specified purpose.",
+      "required_evidence": ["Data inventory with purpose for each personal field", "Justification for personal fields used as model inputs"],
+      "guidance": "The automatic privacy scan lists candidate personal-data columns. Use it to prepare this justification."
+    },
+    {
+      "id": "DPDP-04",
+      "title": "Accuracy and completeness where data drives decisions",
+      "source": "DPDP Act 2023, s.8",
+      "question": "Is personal data used to make a decision that affects a person?",
+      "requirement": "Reasonable efforts are made to keep personal data complete, accurate and consistent when it is used to make a decision affecting the person.",
+      "required_evidence": ["Data quality checks", "Process for correcting wrong records"],
+      "guidance": "Drift and missing-data results from the audit can support this item.",
+      "applies_when": {"automated_decision": true},
+      "not_applicable_reason": "The system was not marked as making or driving decisions about people."
+    },
+    {
+      "id": "DPDP-05",
+      "title": "Reasonable security safeguards",
+      "source": "DPDP Act 2023, s.8; DPDP Rules 2025, r.6",
+      "question": "What technical and organisational safeguards protect the personal data used here (access control, encryption, logging, backups)?",
+      "requirement": "Reasonable security safeguards protect personal data against breach.",
+      "required_evidence": ["Access control list or policy", "Encryption and backup description", "Last access review date"],
+      "guidance": "This tool cannot verify your infrastructure. Upload what you have and have a reviewer judge adequacy."
+    },
+    {
+      "id": "DPDP-06",
+      "title": "Personal data breach response",
+      "source": "DPDP Act 2023, s.8; DPDP Rules 2025, r.7",
+      "question": "Is there a written procedure to detect, contain and report a personal data breach, with a named owner?",
+      "requirement": "A breach can be detected and reported to the Board and affected people as required.",
+      "required_evidence": ["Incident response procedure", "Named contact and escalation path", "Date of last test or review"],
+      "guidance": "A missing procedure is a common early gap. Check the Rules for the report content and timelines."
+    },
+    {
+      "id": "DPDP-07",
+      "title": "Retention and erasure",
+      "source": "DPDP Act 2023, s.8",
+      "question": "Do you have a retention period for this data and a way to delete it when it is no longer needed?",
+      "requirement": "Personal data is erased when its purpose is served or consent is withdrawn, unless law requires retention.",
+      "required_evidence": ["Retention schedule", "Evidence a deletion has been carried out"],
+      "guidance": "The audit can count rows past a declared retention date. The schedule and deletion proof come from you."
+    },
+    {
+      "id": "DPDP-08",
+      "title": "Processors acting on your behalf",
+      "source": "DPDP Act 2023, s.8",
+      "question": "Do vendors or cloud services process this personal data for you?",
+      "requirement": "Processing by others is under a valid contract, and you remain responsible for it.",
+      "required_evidence": ["List of processors", "Contract or data processing terms"],
+      "guidance": "Include hosting, analytics and labelling vendors."
+    },
+    {
+      "id": "DPDP-09",
+      "title": "Rights requests and grievance redressal",
+      "source": "DPDP Act 2023, ss.11-14",
+      "question": "Can a person ask what data you hold, correct it, have it erased, and complain, and who handles that?",
+      "requirement": "People have working routes to access, correction, erasure and grievance redressal, with published contact details.",
+      "required_evidence": ["Request handling procedure", "Published contact for grievances", "Example of a handled request or a test"],
+      "guidance": "For automated decisions, also record how a person can ask for a human to look at the outcome."
+    },
+    {
+      "id": "DPDP-10",
+      "title": "Children's personal data",
+      "source": "DPDP Act 2023, s.9",
+      "question": "Does the system process personal data of anyone under 18?",
+      "requirement": "Verifiable parental consent is obtained and tracking or targeted advertising directed at children is avoided, subject to exemptions.",
+      "required_evidence": ["Method used to establish age and parental consent"],
+      "guidance": "Applies only if children's data is processed.",
+      "applies_when": {"processes_children_data": true},
+      "not_applicable_reason": "The system was not marked as processing children's data."
+    },
+    {
+      "id": "DPDP-11",
+      "title": "Significant Data Fiduciary status",
+      "source": "DPDP Act 2023, s.10; DPDP Rules 2025, r.13",
+      "question": "Has the Central Government notified your organisation as a Significant Data Fiduciary?",
+      "requirement": "Additional duties apply only to notified Significant Data Fiduciaries. Most startups are not.",
+      "required_evidence": ["Statement of status with the basis for it", "If notified: DPO appointment, independent data audit and impact assessment records"],
+      "guidance": "Do not assume the extra duties apply to you. Do not assume they never will as you grow.",
+      "applies_when": {"is_significant_data_fiduciary": true},
+      "not_applicable_reason": "The system was not marked as run by a Significant Data Fiduciary."
+    }
+  ]
+}

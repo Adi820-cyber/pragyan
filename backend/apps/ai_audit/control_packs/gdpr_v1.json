@@ -1,0 +1,142 @@
+{
+  "pack_id": "gdpr_v1",
+  "version": "1.0",
+  "title": "EU GDPR readiness checklist",
+  "jurisdiction": "GDPR",
+  "legal_review_status": "Plain-language aid prepared from the regulation text and EDPB guidance for small organisations. Not reviewed by counsel and not legal advice. Have a qualified professional confirm applicability and wording before relying on any item as an obligation for your organisation.",
+  "effective_status_note": "The GDPR (Regulation (EU) 2016/679) is in force. Small size does not remove its application; whether it applies to you depends on your processing and the people it concerns.",
+  "sources": [
+    {"label": "GDPR text (EUR-Lex)", "url": "https://eur-lex.europa.eu/eli/reg/2016/679/oj"},
+    {"label": "EDPB: data protection guide for small businesses", "url": "https://www.edpb.europa.eu/sme-data-protection-guide/home_en"}
+  ],
+  "controls": [
+    {
+      "id": "GDPR-01",
+      "title": "Lawful basis for each purpose",
+      "source": "GDPR Art. 5(1)(a), Art. 6",
+      "question": "Which of the six lawful bases applies to each way you use personal data for this system?",
+      "requirement": "Each processing purpose has one documented lawful basis. Consent is only one of them.",
+      "required_evidence": ["Purpose-to-lawful-basis mapping", "Legitimate-interests assessment, if relied on"],
+      "guidance": "Do not default to consent. Pick the basis that actually fits."
+    },
+    {
+      "id": "GDPR-02",
+      "title": "Special-category data",
+      "source": "GDPR Art. 9",
+      "question": "Does the system process data revealing race, health, religion, biometrics or other special categories, including group attributes used for fairness testing?",
+      "requirement": "Special-category data needs an additional condition under Art. 9 as well as an Art. 6 basis.",
+      "required_evidence": ["Art. 9 condition relied on", "Justification for holding group attributes for testing"],
+      "guidance": "Fairness testing often needs sensitive attributes. Record why and how they are protected."
+    },
+    {
+      "id": "GDPR-03",
+      "title": "Transparency to individuals",
+      "source": "GDPR Arts. 12-14",
+      "question": "Are individuals told who you are, why you process their data, and their rights?",
+      "requirement": "Privacy information is concise, clear and given at the right time.",
+      "required_evidence": ["Privacy notice", "Where it is presented"],
+      "guidance": "Include meaningful information about the logic of automated decisions where Art. 22 applies."
+    },
+    {
+      "id": "GDPR-04",
+      "title": "Automated individual decisions",
+      "source": "GDPR Art. 22",
+      "question": "Does the system make decisions with legal or similarly significant effects on people, solely by automated means?",
+      "requirement": "Such decisions are allowed only in limited cases and need safeguards including human review, a way to express a view and to contest the decision.",
+      "required_evidence": ["Human review procedure", "How individuals contest a decision", "Evidence reviewers can and do change outcomes"],
+      "guidance": "An explanation chart alone does not meet this item.",
+      "applies_when": {"automated_decision": true},
+      "not_applicable_reason": "The system was not marked as making or driving decisions about people."
+    },
+    {
+      "id": "GDPR-05",
+      "title": "Purpose limitation and data minimisation",
+      "source": "GDPR Art. 5(1)(b)-(c)",
+      "question": "Is every personal field used here adequate, relevant and limited to what is necessary?",
+      "requirement": "Data is collected for specified purposes and limited to what is necessary.",
+      "required_evidence": ["Data inventory with purpose for each personal field", "Review of model inputs against it"],
+      "guidance": "The automatic privacy scan lists candidate personal-data columns to start from."
+    },
+    {
+      "id": "GDPR-06",
+      "title": "Accuracy",
+      "source": "GDPR Art. 5(1)(d)",
+      "question": "Are there checks that the data behind decisions is accurate and kept up to date?",
+      "requirement": "Inaccurate personal data is corrected or erased without delay.",
+      "required_evidence": ["Data quality checks", "Correction process"],
+      "guidance": "Drift and missing-data results can support this item."
+    },
+    {
+      "id": "GDPR-07",
+      "title": "Data protection by design and by default",
+      "source": "GDPR Art. 25",
+      "question": "Were privacy measures built into the system design, such as pseudonymisation and limited access?",
+      "requirement": "Appropriate measures are built in from design, and by default only necessary data is processed.",
+      "required_evidence": ["Design notes or architecture review", "Default settings description"],
+      "guidance": "Short written design notes are better evidence than none."
+    },
+    {
+      "id": "GDPR-08",
+      "title": "Processors and contracts",
+      "source": "GDPR Art. 28",
+      "question": "Do vendors process personal data on your behalf?",
+      "requirement": "A written contract with required terms governs each processor.",
+      "required_evidence": ["Processor list", "Data processing agreements"],
+      "guidance": "Include cloud, analytics and annotation vendors."
+    },
+    {
+      "id": "GDPR-09",
+      "title": "Records of processing",
+      "source": "GDPR Art. 30",
+      "question": "Do you keep a record of your processing activities?",
+      "requirement": "Records are kept. The small-organisation exemption is narrow and does not apply to processing that is regular or likely to risk individuals.",
+      "required_evidence": ["Record of processing activities"],
+      "guidance": "A simple spreadsheet is accepted if it has the required fields."
+    },
+    {
+      "id": "GDPR-10",
+      "title": "Security of processing",
+      "source": "GDPR Art. 32",
+      "question": "What technical and organisational measures protect confidentiality, integrity and availability?",
+      "requirement": "Measures are appropriate to the risk and tested or reviewed regularly.",
+      "required_evidence": ["Security policy", "Access review record", "Backup and recovery description"],
+      "guidance": "This tool cannot verify your infrastructure. A reviewer judges the evidence."
+    },
+    {
+      "id": "GDPR-11",
+      "title": "Personal data breach notification",
+      "source": "GDPR Arts. 33-34",
+      "question": "Can you detect a breach and notify the supervisory authority within the required period and affected people where needed?",
+      "requirement": "A procedure exists to assess, record and notify breaches.",
+      "required_evidence": ["Breach procedure", "Named owner", "Breach log"],
+      "guidance": "Check the current notification period in Art. 33."
+    },
+    {
+      "id": "GDPR-12",
+      "title": "Data protection impact assessment",
+      "source": "GDPR Art. 35",
+      "question": "Is the processing likely to result in a high risk to individuals, for example systematic evaluation of people by automated means?",
+      "requirement": "A DPIA is carried out before high-risk processing starts.",
+      "required_evidence": ["DPIA, or a recorded reason none is required"],
+      "guidance": "Automated profiling that affects people is a common trigger."
+    },
+    {
+      "id": "GDPR-13",
+      "title": "Rights of individuals",
+      "source": "GDPR Arts. 12-22",
+      "question": "Can people access, correct, erase, restrict or object to the processing of their data, and who handles requests?",
+      "requirement": "Requests are handled within the required period without undue cost.",
+      "required_evidence": ["Request handling procedure", "Request log"],
+      "guidance": "Test the procedure with a sample request."
+    },
+    {
+      "id": "GDPR-14",
+      "title": "Transfers outside the EEA",
+      "source": "GDPR Chapter V, Arts. 44-49",
+      "question": "Is personal data transferred outside the European Economic Area, including to vendors or staff in other countries?",
+      "requirement": "A valid transfer mechanism applies to each transfer.",
+      "required_evidence": ["Transfer list with mechanism for each"],
+      "guidance": "Hosting and support tools are common hidden transfers."
+    }
+  ]
+}

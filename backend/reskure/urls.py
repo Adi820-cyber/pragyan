@@ -84,8 +84,29 @@ router.register(r"alert-sources", AlertSourceViewSet, basename="alert-source")
 router.register(r"security-alerts", SecurityAlertViewSet, basename="security-alert")
 router.register(r"containment-actions", ContainmentActionViewSet, basename="containment-action")
 
+from apps.core.auth_views import LoginView, LogoutView, MeView
+
+# Responsible AI audit
+from apps.ai_audit import views as ai
+
+router.register(r"ai/systems", ai.AISystemViewSet, basename="ai-system")
+router.register(r"ai/model-versions", ai.ModelVersionViewSet, basename="ai-model-version")
+router.register(r"ai/datasets", ai.DatasetViewSet, basename="ai-dataset")
+router.register(r"ai/runs", ai.AuditRunViewSet, basename="ai-run")
+router.register(r"ai/findings", ai.FindingViewSet, basename="ai-finding")
+router.register(r"ai/control-assessments", ai.ControlAssessmentViewSet, basename="ai-control-assessment")
+router.register(r"ai/control-evidence", ai.ControlEvidenceViewSet, basename="ai-control-evidence")
+
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("api/v1/ai/overview/", ai.OverviewView.as_view(), name="ai-overview"),
+    path("api/v1/ai/bundles/", ai.BundleView.as_view(), name="ai-bundles"),
+    path("api/v1/ai/members/", ai.MemberListView.as_view(), name="ai-members"),
+    path("api/v1/ai/control-packs/", ai.ControlPackView.as_view(), name="ai-control-packs"),
+    path("api/v1/ai/demo/seed/", ai.DemoSeedView.as_view(), name="ai-demo-seed"),
+    path("api/v1/auth/login/", LoginView.as_view(), name="auth-login"),
+    path("api/v1/auth/logout/", LogoutView.as_view(), name="auth-logout"),
+    path("api/v1/auth/me/", MeView.as_view(), name="auth-me"),
     path("api/v1/", include(router.urls)),
 
     # OpenAPI Schema & Interactive Documentation

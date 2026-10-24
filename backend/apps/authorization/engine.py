@@ -32,7 +32,7 @@ class PolicyEngine:
     ) -> PolicyDecision:
         context = context or {}
         actor_id = str(getattr(actor, "id", getattr(actor, "pk", "anonymous")))
-        actor_email = getattr(actor, "email", "unknown@reskure.local")
+        actor_email = getattr(actor, "email", "") or ""
         actor_tenant_id = getattr(actor, "tenant_id", None)
 
         resource_type = resource.__class__.__name__ if resource else "global"
@@ -55,6 +55,21 @@ class PolicyEngine:
         effective_tenant_id = actor_tenant_id or resource_tenant_id
 
         # -------------------------------------------------------------
+        # STEP 1b: Only an authenticated tenant membership may act.
+        # Anonymous callers and users without a membership are denied
+        # outright; they never fall back to a default role.
+        # -------------------------------------------------------------
+        if actor is None or not actor_tenant_id or not getattr(actor, "role", None) \
+                or getattr(actor, "status", "ACTIVE") != "ACTIVE":
+            decision = PolicyDecision(
+                allowed=False,
+                reason="Authentication with an active tenant membership is required.",
+                decision_code="DENY_UNAUTHENTICATED",
+            )
+            cls._log_decision(effective_tenant_id, actor_id, actor_email, permission_code, resource_type, resource_id, decision, context)
+            return decision
+
+        # -------------------------------------------------------------
         # STEP 2: Segregation of Duties (SoD) Rule Check (First Line Defense)
         # -------------------------------------------------------------
         if resource:
@@ -71,7 +86,7 @@ class PolicyEngine:
         # -------------------------------------------------------------
         # STEP 3: Coarse RBAC Evaluation
         # -------------------------------------------------------------
-        actor_role = getattr(actor, "role", "CONTRIBUTOR")
+        actor_role = actor.role
 
         # Tenant admin has full administrative delegation within their tenant
         if actor_role == "TENANT_ADMIN":
@@ -153,8 +168,11 @@ class PolicyEngine:
             "COMPLIANCE_OFFICER": ["risk.", "control.", "evidence.", "compliance.", "workflow.", "audit.read"],
             "RISK_OWNER": ["risk.read", "risk.create", "risk.update", "evidence.upload", "control.read"],
             "AUDITOR": ["risk.read", "control.read", "evidence.read", "audit.read", "audit.export", "secops.read"],
-            "CONTRIBUTOR": ["evidence.upload", "control.read", "risk.read", "task.complete"],
+            "CONTRIBUTOR": ["evidence.upload", "control.read", "risk.read", "task.complete", "ai.read"],
         }
+        fallback_role_map["COMPLIANCE_OFFICER"].append("ai.")
+        fallback_role_map["RISK_OWNER"] += ["ai.read", "ai.create", "ai.update"]
+        fallback_role_map["AUDITOR"].append("ai.read")
         allowed_prefixes = fallback_role_map.get(actor_role, [])
         for prefix in allowed_prefixes:
             if permission_code.startswith(prefix):

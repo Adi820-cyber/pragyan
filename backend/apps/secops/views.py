@@ -32,10 +32,9 @@ class SecurityAlertViewSet(viewsets.ModelViewSet):
         alert = self.get_object()
         action_type = request.data.get("action_type", "ISOLATE_HOST")
         target_id = request.data.get("target_identifier", alert.affected_asset.name if alert.affected_asset else "unknown")
-        auto_approve = request.data.get("auto_approve", False)
-
-        requested_by_id = request.data.get("requested_by_id")
-        requested_by = Membership.objects.filter(id=requested_by_id, tenant_id=alert.tenant_id).first() if requested_by_id else None
+        # Auto-approval is never client-controlled; every request goes through approval.
+        auto_approve = False
+        requested_by = getattr(request, "membership", None)
 
         approval_req = None
         action_status = "PENDING_APPROVAL"

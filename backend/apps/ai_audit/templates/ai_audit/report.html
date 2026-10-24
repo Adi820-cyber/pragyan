@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI audit report: {{ report.system.name }}</title>
+<style>
+  :root { --ink:#0f172a; --muted:#475569; --line:#cbd5e1; --bg:#ffffff; --ok:#166534; --warn:#92400e; --bad:#991b1b; --na:#475569; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: var(--ink); background: var(--bg); margin: 0; padding: 32px; max-width: 960px; margin-inline: auto; }
+  h1 { font-size: 24px; margin: 0 0 4px; } h2 { font-size: 18px; margin: 32px 0 8px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+  h3 { font-size: 15px; margin: 20px 0 6px; } p { margin: 6px 0; } .muted { color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; font-size: 13px; }
+  th, td { text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); padding: 6px 8px; }
+  th { background: #f1f5f9; font-weight: 600; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  .card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid currentColor; }
+  .s-assessed, .s-no_alert { color: var(--ok); } .s-review_required { color: var(--warn); } .s-error { color: var(--bad); }
+  .s-not_assessed, .s-not_applicable, .s-insufficient_evidence { color: var(--na); }
+  .bar { height: 8px; background: #e2e8f0; border-radius: 4px; min-width: 80px; } .bar > span { display: block; height: 100%; background: #0369a1; border-radius: 4px; }
+  .notice { border-left: 4px solid var(--warn); background: #fffbeb; padding: 8px 12px; margin: 12px 0; }
+  code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; }
+  @media print { body { padding: 0; } h2 { break-after: avoid; } tr, .card { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Responsible AI audit report</h1>
+  <p><strong>{{ report.system.name }}</strong> &middot; model {{ report.model_version.label }} &middot; run <code>{{ report.run.id }}</code></p>
+  <p class="muted">Generated {{ report.generated_at|date:"Y-m-d H:i" }} UTC &middot; run finished {{ report.run.finished_at|date:"Y-m-d H:i"|default:"n/a" }} &middot; status {{ report.run.status }}</p>
+</header>
+
+<div class="notice"><strong>What this report is.</strong> {{ report.limitations.0 }}</div>
+
+<h2>Coverage</h2>
+<div class="grid">
+  {% for s in sections %}
+  <div class="card">
+    <strong>{{ s.label }}</strong>
+    <p><span class="badge s-{{ s.coverage.status }}">{{ s.coverage.status_label }}</span></p>
+    <p class="muted">{{ s.coverage.total }} result{{ s.coverage.total|pluralize }}{% if s.coverage.count_text %}: {{ s.coverage.count_text }}{% endif %}</p>
+  </div>
+  {% endfor %}
+</div>
+
+<h2>System and inputs</h2>
+<table>
+  <tr><th style="width:30%">Purpose</th><td>{{ report.system.purpose }}</td></tr>
+  <tr><th>Decision affected</th><td>{{ report.system.decision_affected|default:"Not stated" }}</td></tr>
+  <tr><th>Intended population</th><td>{{ report.system.intended_population|default:"Not stated" }}</td></tr>
+  <tr><th>Owner / reviewer</th><td>{{ report.system.owner|default:"Not assigned" }} / {{ report.system.reviewer|default:"Not assigned" }}</td></tr>
+  <tr><th>Jurisdictions assessed</th><td>{{ report.system.jurisdictions|join:", "|default:"None selected" }}</td></tr>
+  <tr><th>Model</th><td>{{ report.model_version.label }} ({{ report.model_version.source_label }}){% if report.model_version.model_type %}, {{ report.model_version.model_type }}{% endif %}</td></tr>
+  <tr><th>Group columns / outcome</th><td>{{ report.run.config.group_columns|join:", "|default:"None declared" }} / favourable label {{ report.run.config.favourable_label }}{% if report.run.config.label_column %}, outcomes in {{ report.run.config.label_column }}{% else %}, no outcome column{% endif %}</td></tr>
+</table>
+<table>
+  <tr><th>Dataset</th><th>Rows</th><th>Period</th><th>SHA-256</th></tr>
+  {% for d in report.datasets %}
+  <tr><td>{{ d.role|title }}: {{ d.name }}{% if d.is_sample %} <span class="badge s-not_applicable">sample data</span>{% endif %}</td><td>{{ d.row_count }}</td><td>{{ d.period_start|default:"?" }} to {{ d.period_end|default:"?" }}</td><td><code>{{ d.sha256 }}</code></td></tr>
+  {% endfor %}
+</table>
+
+<h2>Findings and actions</h2>
+{% if report.findings %}
+<table>
+  <tr><th>Finding</th><th>Severity</th><th>Status</th><th>Owner</th><th>Due</th></tr>
+  {% for f in report.findings %}
+  <tr>
+    <td><strong>{{ f.title }}</strong><br>{{ f.plain_language }}<br><span class="muted">Next step: {{ f.next_step }}</span>
+      {% if f.remediation_note %}<br><span class="muted">Remediation: {{ f.remediation_note }}</span>{% endif %}
+      {% if f.review_comment %}<br><span class="muted">Reviewer ({{ f.reviewed_by }}, {{ f.reviewed_at|date:"Y-m-d" }}): {{ f.review_comment }}</span>{% endif %}</td>
+    <td>{{ f.severity }}</td><td>{{ f.status_label }}</td><td>{{ f.owner|default:"Unassigned" }}</td><td>{{ f.due_date|default:"-" }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p>No findings were raised by this run. That does not mean checks that were not assessed are clear; see coverage above.</p>{% endif %}
+
+{% for s in sections %}
+<h2>{{ s.label }}</h2>
+<p><span class="badge s-{{ s.coverage.status }}">{{ s.coverage.status_label }}</span></p>
+{% if not s.results %}<p class="muted">No results were recorded for this category.</p>{% endif %}
+
+{% if s.key == "explainability" %}
+  {% if importance %}
+  <h3>Global feature influence</h3>
+  <table>
+    {% for r in importance %}<tr><td style="width:30%">{{ r.subject }}</td><td><div class="bar"><span style="width:{{ r.bar }}%"></span></div></td><td>{{ r.value|floatformat:3 }} {{ r.unit }}</td></tr>{% endfor %}
+  </table>
+  {% endif %}
+  {% if examples %}
+  <h3>Example decisions</h3>
+  {% for ex in examples %}
+  <p>Row {{ ex.row_index }}: model output {{ ex.output|floatformat:3 }} (base value {{ ex.base_value|floatformat:3 }}). Largest contributions:
+    {% for c in ex.top %}{{ c.feature }}={{ c.value }} ({{ c.contribution|floatformat:3 }}){% if not forloop.last %}, {% endif %}{% endfor %}</p>
+  {% endfor %}
+  {% endif %}
+{% endif %}
+
+{% if s.results %}
+<table>
+  <tr><th>Check</th><th>Subject</th><th>Value</th><th>Support</th><th>State</th><th>What it means</th></tr>
+  {% for r in s.results %}
+  {% if r.check_key != "local_explanations" %}
+  <tr>
+    <td>{{ r.metric }}</td><td>{{ r.subject }}</td>
+    <td>{% if r.value is not None %}{{ r.value|floatformat:3 }}{% if r.ci_low is not None %}<br><span class="muted">95% interval {{ r.ci_low|floatformat:3 }} to {{ r.ci_high|floatformat:3 }}</span>{% endif %}{% if r.threshold is not None %}<br><span class="muted">threshold {{ r.threshold }}</span>{% endif %}{% if r.bar is not None %}<div class="bar"><span style="width:{{ r.bar }}%"></span></div>{% endif %}{% else %}n/a{% endif %}</td>
+    <td>{{ r.support_n|default_if_none:"-" }}</td>
+    <td><span class="badge s-{{ r.state }}">{{ r.state_label }}</span>{% if r.origin == "local_bundle" %}<br><span class="muted">supplied by local tool</span>{% endif %}</td>
+    <td>{{ r.summary }}</td>
+  </tr>
+  {% endif %}
+  {% endfor %}
+</table>
+{% endif %}
+{% endfor %}
+
+<h2>Control checklist (DPDP / GDPR readiness)</h2>
+{% if report.controls %}
+<p class="muted">{{ report.controls_summary.needs_attention }} of {{ report.controls_summary.applicable }} applicable controls need attention. Control wording has not been reviewed by counsel.</p>
+<table>
+  <tr><th>Control</th><th>Source</th><th>State</th><th>Evidence</th><th>Reviewer</th></tr>
+  {% for c in report.controls %}
+  <tr>
+    <td><strong>{{ c.control_id }}</strong> {{ c.title }}</td><td>{{ c.source }}</td>
+    <td><span class="badge s-{% if c.state == 'reviewed' %}assessed{% elif c.state == 'gap_identified' %}review_required{% else %}not_applicable{% endif %}">{{ c.state_label }}</span>{% if not c.applicable %}<br><span class="muted">{{ c.applicability_rationale }}</span>{% endif %}</td>
+    <td>{% for e in c.evidence %}{{ e.title }} <code>{{ e.sha256|slice:":12" }}</code><br>{% empty %}-{% endfor %}</td>
+    <td>{{ c.reviewer|default:"-" }}{% if c.review_comment %}<br><span class="muted">{{ c.review_comment }}</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p class="muted">No jurisdiction was selected for this system, so no control checklist was assessed.</p>{% endif %}
+
+<h2>Method and provenance</h2>
+<table>
+  <tr><th style="width:30%">Policy thresholds</th><td>{% for k, v in report.run.config.effective_thresholds.items %}{{ k }}={{ v }}{% if not forloop.last %}, {% endif %}{% endfor %}<br><span class="muted">{{ report.run.config.thresholds_rationale }}</span></td></tr>
+  <tr><th>Minimum group size / bootstrap / seed</th><td>{{ report.run.config.min_group_size }} / {{ report.run.config.bootstrap }} / {{ report.run.config.seed }}</td></tr>
+  <tr><th>Libraries</th><td>{% for k, v in report.run.library_versions.items %}{{ k }} {{ v }}{% if not forloop.last %}, {% endif %}{% endfor %}</td></tr>
+  <tr><th>Control packs</th><td>{% for k, v in report.run.control_pack_versions.items %}{{ k }} v{{ v }}{% if not forloop.last %}, {% endif %}{% empty %}None{% endfor %}</td></tr>
+</table>
+
+<h2>Limitations</h2>
+<ul>{% for l in report.limitations %}<li>{{ l }}</li>{% endfor %}</ul>
+</body>
+</html>

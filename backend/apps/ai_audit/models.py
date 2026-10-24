@@ -1,0 +1,267 @@
+from django.db import models
+from django.utils import timezone
+
+from apps.core.models import Membership, TenantScopedModel
+from apps.ai_audit.storage import dataset_upload_path, evidence_upload_path, private_storage
+
+
+class AISystem(TenantScopedModel):
+    STATUS_CHOICES = [("ACTIVE", "Active"), ("ARCHIVED", "Archived")]
+
+    name = models.CharField(max_length=200)
+    purpose = models.TextField()
+    decision_affected = models.CharField(max_length=300, blank=True)
+    intended_population = models.CharField(max_length=300, blank=True)
+    owner = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="owned_ai_systems")
+    reviewer = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="reviewed_ai_systems")
+    jurisdictions = models.JSONField(default=list, help_text='e.g. ["DPDP", "GDPR"]')
+    automated_decision = models.BooleanField(default=False, help_text="Decisions about people are made or driven automatically.")
+    processes_children_data = models.BooleanField(default=False)
+    is_significant_data_fiduciary = models.BooleanField(default=False)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="ACTIVE")
+
+    class Meta:
+        db_table = "ai_system"
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
+class ModelVersion(TenantScopedModel):
+    SOURCE_CHOICES = [
+        ("server_sample", "Built-in sample model (server-computed explanations)"),
+        ("local_bundle", "Customer model (explanations from local audit tool)"),
+        ("predictions_only", "Predictions only (no explanations)"),
+    ]
+
+    system = models.ForeignKey(AISystem, on_delete=models.CASCADE, related_name="model_versions")
+    version_label = models.CharField(max_length=100)
+    source = models.CharField(max_length=30, choices=SOURCE_CHOICES, default="predictions_only")
+    sample_key = models.CharField(max_length=50, blank=True, help_text="Built-in sample model key, for server_sample only.")
+    model_type = models.CharField(max_length=100, blank=True)
+    feature_columns = models.JSONField(default=list)
+    favourable_label = models.CharField(max_length=50, default="1")
+    threshold = models.FloatField(default=0.5)
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        db_table = "ai_model_version"
+        ordering = ["system__name", "version_label"]
+        constraints = [
+            models.UniqueConstraint(fields=["system", "version_label"], name="unique_model_version_label_per_system"),
+        ]
+
+    def __str__(self):
+        return f"{self.system.name} {self.version_label}"
+
+
+class Dataset(TenantScopedModel):
+    ROLE_CHOICES = [("reference", "Reference"), ("current", "Current")]
+
+    system = models.ForeignKey(AISystem, on_delete=models.CASCADE, related_name="datasets")
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES)
+    name = models.CharField(max_length=200)
+    original_filename = models.CharField(max_length=255, blank=True)
+    file = models.FileField(upload_to=dataset_upload_path, storage=private_storage)
+    sha256 = models.CharField(max_length=64)
+    row_count = models.PositiveIntegerField(default=0)
+    column_schema = models.JSONField(default=list)
+    pii_scan = models.JSONField(default=dict)
+    period_start = models.DateField(null=True, blank=True)
+    period_end = models.DateField(null=True, blank=True)
+    is_sample = models.BooleanField(default=False)
+    uploaded_by = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="uploaded_datasets")
+    delete_after = models.DateField(null=True, blank=True)
+
+    class Meta:
+        db_table = "ai_dataset"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.name} ({self.role})"
+
+
+class ExplanationBundle(TenantScopedModel):
+    """Result bundle produced by the local audit tool in the customer's own environment."""
+
+    system = models.ForeignKey(AISystem, on_delete=models.CASCADE, related_name="bundles")
+    model_version = models.ForeignKey(ModelVersion, on_delete=models.CASCADE, related_name="bundles")
+    payload = models.JSONField()
+    sha256 = models.CharField(max_length=64)
+    producer = models.JSONField(default=dict)
+    uploaded_by = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL)
+
+    class Meta:
+        db_table = "ai_explanation_bundle"
+        ordering = ["-created_at"]
+
+
+class AuditRun(TenantScopedModel):
+    STATUS_CHOICES = [
+        ("queued", "Queued"),
+        ("running", "Running"),
+        ("completed", "Completed"),
+        ("failed", "Failed"),
+        ("cancelled", "Cancelled"),
+    ]
+
+    system = models.ForeignKey(AISystem, on_delete=models.CASCADE, related_name="runs")
+    model_version = models.ForeignKey(ModelVersion, on_delete=models.PROTECT, related_name="runs")
+    reference_dataset = models.ForeignKey(Dataset, on_delete=models.PROTECT, related_name="runs_as_reference")
+    current_dataset = models.ForeignKey(Dataset, null=True, blank=True, on_delete=models.PROTECT, related_name="runs_as_current")
+    config = models.JSONField(default=dict)
+    control_pack_versions = models.JSONField(default=dict)
+    library_versions = models.JSONField(default=dict)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="queued", db_index=True)
+    progress = models.PositiveSmallIntegerField(default=0)
+    progress_message = models.CharField(max_length=200, blank=True)
+    error = models.TextField(blank=True)
+    cancel_requested = models.BooleanField(default=False)
+    started_at = models.DateTimeField(null=True, blank=True)
+    heartbeat_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="ai_runs")
+
+    class Meta:
+        db_table = "ai_audit_run"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Run {self.id} ({self.status})"
+
+
+class CheckResult(TenantScopedModel):
+    """Immutable measurement. Decisions about results live on Finding / ControlAssessment."""
+
+    CATEGORY_CHOICES = [
+        ("bias", "Bias"),
+        ("drift", "Drift"),
+        ("explainability", "Explainability"),
+        ("privacy", "Privacy"),
+    ]
+    STATE_CHOICES = [
+        ("no_alert", "No alert under selected policy"),
+        ("review_required", "Review required"),
+        ("insufficient_evidence", "Insufficient evidence"),
+        ("not_applicable", "Not applicable"),
+        ("error", "Error"),
+    ]
+    ORIGIN_CHOICES = [("server", "Computed by server"), ("local_bundle", "Supplied by local tool")]
+
+    run = models.ForeignKey(AuditRun, on_delete=models.CASCADE, related_name="results")
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, db_index=True)
+    check_key = models.CharField(max_length=80)
+    subject = models.CharField(max_length=200, blank=True)
+    metric = models.CharField(max_length=80)
+    value = models.FloatField(null=True, blank=True)
+    unit = models.CharField(max_length=40, blank=True)
+    support_n = models.PositiveIntegerField(null=True, blank=True)
+    ci_low = models.FloatField(null=True, blank=True)
+    ci_high = models.FloatField(null=True, blank=True)
+    threshold = models.FloatField(null=True, blank=True)
+    state = models.CharField(max_length=30, choices=STATE_CHOICES)
+    summary = models.TextField(blank=True, help_text="Plain-language statement of what was measured.")
+    detail = models.JSONField(default=dict)
+    origin = models.CharField(max_length=20, choices=ORIGIN_CHOICES, default="server")
+    is_finding_candidate = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = "ai_check_result"
+        ordering = ["category", "check_key", "subject", "metric"]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValueError("CheckResult rows are immutable once written.")
+        super().save(*args, **kwargs)
+
+
+class Finding(TenantScopedModel):
+    SEVERITY_CHOICES = [("LOW", "Low"), ("MEDIUM", "Medium"), ("HIGH", "High")]
+    STATUS_CHOICES = [
+        ("open", "Open"),
+        ("in_remediation", "In remediation"),
+        ("submitted", "Submitted for review"),
+        ("accepted", "Risk accepted"),
+        ("resolved", "Resolved"),
+    ]
+
+    system = models.ForeignKey(AISystem, on_delete=models.CASCADE, related_name="findings")
+    run = models.ForeignKey(AuditRun, on_delete=models.CASCADE, related_name="findings")
+    results = models.ManyToManyField(CheckResult, related_name="findings", blank=True)
+    category = models.CharField(max_length=20, choices=CheckResult.CATEGORY_CHOICES)
+    fingerprint = models.CharField(max_length=200, db_index=True)
+    title = models.CharField(max_length=300)
+    plain_language = models.TextField()
+    next_step = models.TextField(blank=True)
+    severity = models.CharField(max_length=10, choices=SEVERITY_CHOICES, default="MEDIUM")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="open", db_index=True)
+    owner = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="owned_findings")
+    due_date = models.DateField(null=True, blank=True)
+    remediation_note = models.TextField(blank=True)
+    submitted_by = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="submitted_findings")
+    reviewed_by = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="reviewed_findings")
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_comment = models.TextField(blank=True)
+
+    class Meta:
+        db_table = "ai_finding"
+        ordering = ["-created_at"]
+
+
+class FindingEvent(TenantScopedModel):
+    finding = models.ForeignKey(Finding, on_delete=models.CASCADE, related_name="events")
+    actor = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL)
+    action = models.CharField(max_length=40)
+    from_status = models.CharField(max_length=20, blank=True)
+    to_status = models.CharField(max_length=20, blank=True)
+    comment = models.TextField(blank=True)
+
+    class Meta:
+        db_table = "ai_finding_event"
+        ordering = ["created_at"]
+
+
+class ControlAssessment(TenantScopedModel):
+    STATE_CHOICES = [
+        ("needs_evidence", "Needs evidence"),
+        ("evidence_supplied", "Evidence supplied"),
+        ("reviewed", "Reviewed"),
+        ("gap_identified", "Gap identified"),
+        ("not_applicable", "Not applicable"),
+    ]
+
+    system = models.ForeignKey(AISystem, on_delete=models.CASCADE, related_name="control_assessments")
+    pack_id = models.CharField(max_length=50)
+    pack_version = models.CharField(max_length=20)
+    control_id = models.CharField(max_length=50)
+    applicable = models.BooleanField(default=True)
+    applicability_rationale = models.TextField(blank=True)
+    state = models.CharField(max_length=30, choices=STATE_CHOICES, default="needs_evidence")
+    owner_note = models.TextField(blank=True)
+    reviewer = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="reviewed_controls")
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_comment = models.TextField(blank=True)
+    updated_by = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="updated_controls")
+
+    class Meta:
+        db_table = "ai_control_assessment"
+        ordering = ["pack_id", "control_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["system", "pack_id", "control_id"], name="unique_control_assessment_per_system"),
+        ]
+
+
+class ControlEvidence(TenantScopedModel):
+    assessment = models.ForeignKey(ControlAssessment, on_delete=models.CASCADE, related_name="evidence_files")
+    title = models.CharField(max_length=200)
+    original_filename = models.CharField(max_length=255, blank=True)
+    file = models.FileField(upload_to=evidence_upload_path, storage=private_storage)
+    sha256 = models.CharField(max_length=64)
+    size_bytes = models.PositiveBigIntegerField(default=0)
+    content_type = models.CharField(max_length=100, blank=True)
+    uploaded_by = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL)
+
+    class Meta:
+        db_table = "ai_control_evidence"
+        ordering = ["-created_at"]

@@ -1,5 +1,5 @@
 from rest_framework import viewsets
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAuthenticated
 from apps.core.models import Tenant, OrgUnit, Membership, AccessDecisionLog, AuditLog
 from apps.core.serializers import (
     TenantSerializer, OrgUnitSerializer, MembershipSerializer,
@@ -8,10 +8,11 @@ from apps.core.serializers import (
 from apps.authorization.permissions import HasReskurePermission
 
 
-class TenantViewSet(viewsets.ModelViewSet):
+class TenantViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only: callers only ever see their own tenant. Tenants are created by operators."""
     queryset = Tenant.objects.all()
     serializer_class = TenantSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
 
 class OrgUnitViewSet(viewsets.ModelViewSet):

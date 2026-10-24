@@ -1,5 +1,5 @@
 from rest_framework import viewsets
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAuthenticated
 from apps.authorization.models import Permission, CustomRole, PolicyRule
 from apps.authorization.serializers import PermissionSerializer, CustomRoleSerializer, PolicyRuleSerializer
 from apps.authorization.permissions import HasReskurePermission
@@ -8,7 +8,7 @@ from apps.authorization.permissions import HasReskurePermission
 class PermissionViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Permission.objects.all()
     serializer_class = PermissionSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
 
 class CustomRoleViewSet(viewsets.ModelViewSet):
