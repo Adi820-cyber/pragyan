@@ -119,6 +119,7 @@ urlpatterns = [
     path("api/v1/network/trace/", net.PacketTraceView.as_view(), name="network-packet-trace"),
     path("api/v1/network/topology/", net.NetworkTopologyView.as_view(), name="network-topology"),
     path("api/v1/network/demo/seed/", net.NetworkSeedDemoView.as_view(), name="network-seed-demo"),
+    path("api/v1/cloud-security/", include("apps.cloud_security.urls")),
     path("api/v1/", include(router.urls)),
 
     # OpenAPI Schema & Interactive Documentation

@@ -38,10 +38,18 @@ const MAP: Record<string, { label: string; tone: Tone; icon: ComponentType<{ cla
   evidence_supplied: { label: "Evidence supplied", tone: "info", icon: Clock },
   reviewed: { label: "Reviewed", tone: "ok", icon: CheckCircle2 },
   gap_identified: { label: "Gap identified", tone: "bad", icon: XCircle },
-  // severities
+  // severities & cloud security
+  CRITICAL: { label: "Critical", tone: "bad", icon: AlertTriangle },
   HIGH: { label: "High", tone: "bad", icon: AlertTriangle },
   MEDIUM: { label: "Medium", tone: "warn", icon: AlertTriangle },
   LOW: { label: "Low", tone: "muted", icon: AlertTriangle },
+  INFORMATIONAL: { label: "Info", tone: "info", icon: HelpCircle },
+  PASS: { label: "Pass", tone: "ok", icon: CheckCircle2 },
+  FAIL: { label: "Fail", tone: "bad", icon: XCircle },
+  MUTED: { label: "Muted", tone: "muted", icon: CircleSlash },
+  CONNECTED: { label: "Connected", tone: "ok", icon: CheckCircle2 },
+  PENDING: { label: "Pending", tone: "info", icon: Clock },
+  ERROR: { label: "Error", tone: "bad", icon: XCircle },
 };
 
 /** Status is always shown as text plus an icon, never by colour alone. */

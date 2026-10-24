@@ -380,3 +380,155 @@ export interface RunDiff {
   };
   note: string;
 }
+
+// ==========================================
+// Cloud Security (Prowler) Types
+// ==========================================
+export type CloudProvider = "AWS" | "AZURE" | "GCP";
+export type CloudAccountStatus = "CONNECTED" | "ERROR" | "PENDING" | "DISABLED";
+export type CloudScanStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
+export type CloudFindingSeverity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFORMATIONAL";
+export type CloudFindingStatus = "PASS" | "FAIL" | "MUTED";
+export type CloudFindingLifecycle = "OPEN" | "IN_REMEDIATION" | "RESOLVED" | "ACCEPTED" | "FALSE_POSITIVE";
+
+export interface CloudAccount {
+  id: string;
+  tenant: string;
+  name: string;
+  provider: CloudProvider;
+  account_id: string;
+  region_default: string;
+  role_arn: string;
+  credentials_ref?: string;
+  environment: "PRODUCTION" | "STAGING" | "DEVELOPMENT";
+  status: CloudAccountStatus;
+  compliance_score: number;
+  last_scanned_at: string | null;
+  last_scan_status: string;
+  total_findings_count: number;
+  critical_findings_count: number;
+  high_findings_count: number;
+  medium_findings_count: number;
+  low_findings_count: number;
+  cloud_connection?: string;
+  cloud_connection_name?: string;
+  created_by?: string;
+  created_by_name?: string;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CloudScan {
+  id: string;
+  tenant: string;
+  account: string;
+  account_name: string;
+  account_provider: CloudProvider;
+  account_id_val: string;
+  scan_type: string;
+  status: CloudScanStatus;
+  started_at: string | null;
+  completed_at: string | null;
+  duration_seconds: number;
+  total_checks: number;
+  passed_checks: number;
+  failed_checks: number;
+  muted_checks: number;
+  critical_findings: number;
+  high_findings: number;
+  medium_findings: number;
+  low_findings: number;
+  compliance_score: number;
+  error_message: string;
+  prowler_version: string;
+  initiated_by?: string;
+  initiated_by_name?: string;
+  created_at: string;
+}
+
+export interface CloudFinding {
+  id: string;
+  tenant: string;
+  scan: string;
+  account: string;
+  account_name: string;
+  provider: CloudProvider;
+  check_id: string;
+  check_title: string;
+  service: string;
+  severity: CloudFindingSeverity;
+  status: CloudFindingStatus;
+  status_extended: string;
+  resource_id: string;
+  resource_name: string;
+  region: string;
+  remediation_recommendation_text: string;
+  remediation_recommendation_url: string;
+  remediation_code: string;
+  compliance: string[];
+  risk_score: number;
+  lifecycle_status: CloudFindingLifecycle;
+  is_latest?: boolean;
+  affected_asset?: string;
+  affected_asset_name?: string;
+  resolution_note?: string;
+  resolved_at?: string | null;
+  created_at: string;
+}
+
+export interface ProwlerRule {
+  id: string;
+  check_id: string;
+  provider: CloudProvider;
+  service: string;
+  title: string;
+  severity: CloudFindingSeverity;
+  description: string;
+  rationale: string;
+  remediation_text: string;
+  remediation_url: string;
+  remediation_code_sample: string;
+  compliance_frameworks: string[];
+  is_active: boolean;
+}
+
+export interface CloudSecurityOverview {
+  overall_score: number;
+  total_accounts: number;
+  connected_accounts: number;
+  error_accounts: number;
+  severity_counts: {
+    CRITICAL: number;
+    HIGH: number;
+    MEDIUM: number;
+    LOW: number;
+  };
+  status_counts: {
+    PASS: number;
+    FAIL: number;
+    RESOLVED: number;
+  };
+  providers_summary: Record<
+    CloudProvider,
+    {
+      accounts_count: number;
+      avg_score: number;
+      open_issues: number;
+    }
+  >;
+  top_services: {
+    service: string;
+    provider: CloudProvider;
+    count: number;
+  }[];
+  recent_scans: CloudScan[];
+  critical_findings: CloudFinding[];
+  frameworks: {
+    code: string;
+    name: string;
+    provider: string;
+    score: number;
+  }[];
+}
+
