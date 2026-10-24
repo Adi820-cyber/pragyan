@@ -1,0 +1,45 @@
+services:
+  # -------------------------------------------------------------
+  # 1. Django REST Backend Web Service
+  # -------------------------------------------------------------
+  - type: web
+    name: reskure-api
+    runtime: python
+    plan: free
+    region: oregon
+    rootDir: backend
+    buildCommand: "chmod +x build.sh && ./build.sh"
+    startCommand: "gunicorn reskure.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120"
+    envVars:
+      - key: DEBUG
+        value: "True"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALLOWED_HOSTS
+        value: "*"
+      - key: CORS_ALLOWED_ORIGINS
+        value: "http://localhost:3000,https://reskure-web.onrender.com"
+      - key: CSRF_TRUSTED_ORIGINS
+        value: "http://localhost:3000,https://*.onrender.com"
+      - key: ALLOW_DEMO_SEED
+        value: "True"
+
+  # -------------------------------------------------------------
+  # 2. Next.js Web Frontend Service
+  # -------------------------------------------------------------
+  - type: web
+    name: reskure-web
+    runtime: node
+    plan: free
+    region: oregon
+    rootDir: frontend
+    buildCommand: "npm install && npm run build"
+    startCommand: "npm run start"
+    envVars:
+      - key: NODE_ENV
+        value: "production"
+      - key: API_BASE_URL
+        fromService:
+          type: web
+          name: reskure-api
+          property: host

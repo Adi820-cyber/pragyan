@@ -76,13 +76,15 @@ class CloudAccountViewSet(viewsets.ModelViewSet):
             account.save(update_fields=["status"])
             return Response({
                 "connected": True,
-                "message": f"Successfully authenticated connection to {account.provider} ({account.account_id}).",
+                "verified_live": False,
+                "message": f"Account ID format for {account.provider} looks valid. No live call to the cloud provider was made.",
             })
         else:
             account.status = "ERROR"
             account.save(update_fields=["status"])
             return Response({
                 "connected": False,
+                "verified_live": False,
                 "message": "Invalid Account ID or missing IAM Role configuration.",
             }, status=status.HTTP_400_BAD_REQUEST)
 
@@ -397,13 +399,25 @@ class CloudSecurityOverviewView(APIView):
             many=True,
         ).data
 
-        # Compliance framework pass rates
+        # Compliance framework pass rates computed dynamically from active findings
+        def _fw_score(prov_filter=None, token=None):
+            if accounts_count == 0:
+                return 0.0
+            qs = findings if not prov_filter else findings.filter(provider=prov_filter)
+            rows = list(qs)
+            if token:
+                rows = [f for f in rows if any(token.lower() in str(c).lower() for c in (f.compliance or []))]
+            if not rows:
+                return avg_score
+            passed = sum(1 for f in rows if f.status == "PASS" or f.lifecycle_status in ("RESOLVED", "ACCEPTED"))
+            return round((passed / len(rows)) * 100.0, 1)
+
         frameworks = [
-            {"code": "CIS-AWS-Foundations-3.0", "name": "CIS AWS Benchmark v3.0", "provider": "AWS", "score": 82.5},
-            {"code": "CIS-Azure-Foundations-2.0", "name": "CIS Azure Benchmark v2.0", "provider": "AZURE", "score": 75.0},
-            {"code": "CIS-GCP-Foundations-2.0", "name": "CIS GCP Benchmark v2.0", "provider": "GCP", "score": 80.0},
-            {"code": "SOC2-CC6", "name": "SOC 2 Type II (Security & Access)", "provider": "MULTI", "score": 88.0},
-            {"code": "ISO27001-2022", "name": "ISO/IEC 27001:2022 Controls", "provider": "MULTI", "score": 84.0},
+            {"code": "CIS-AWS-Foundations-3.0", "name": "CIS AWS Benchmark v3.0", "provider": "AWS", "score": _fw_score("AWS", "CIS")},
+            {"code": "CIS-Azure-Foundations-2.0", "name": "CIS Azure Benchmark v2.0", "provider": "AZURE", "score": _fw_score("AZURE", "CIS")},
+            {"code": "CIS-GCP-Foundations-2.0", "name": "CIS GCP Benchmark v2.0", "provider": "GCP", "score": _fw_score("GCP", "CIS")},
+            {"code": "SOC2-CC6", "name": "SOC 2 Type II (Security & Access)", "provider": "MULTI", "score": _fw_score(None, "SOC")},
+            {"code": "ISO27001-2022", "name": "ISO/IEC 27001:2022 Controls", "provider": "MULTI", "score": _fw_score(None, "ISO")},
         ]
 
         return Response({
@@ -511,7 +525,7 @@ class CloudSecurityDemoSeedView(APIView):
             created_scans.append(str(scan.id))
 
         return Response({
-            "message": "Successfully seeded multi-cloud accounts and executed comprehensive Prowler scans.",
+            "message": "Sample accounts created and scanned against the built-in rule catalogue (simulated results, no cloud calls).",
             "accounts_seeded": 3,
             "scans_completed": len(created_scans),
         }, status=status.HTTP_201_CREATED)

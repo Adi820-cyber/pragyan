@@ -10,6 +10,7 @@ export function SystemForm({ people }: { people: Person[] }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [type, setType] = useState<"llm" | "tabular">("llm");
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -20,6 +21,8 @@ export function SystemForm({ people }: { people: Person[] }) {
     try {
       const created = await call<{ id: string }>("POST", "ai/systems/", {
         name: form.get("name"),
+        system_type: type,
+        requires_citations: type === "llm" && form.get("citations") === "on",
         purpose: form.get("purpose"),
         decision_affected: form.get("decision_affected") || "",
         intended_population: form.get("intended_population") || "",
@@ -42,6 +45,21 @@ export function SystemForm({ people }: { people: Person[] }) {
 
   return (
     <form onSubmit={submit} className="space-y-4">
+      <fieldset>
+        <legend className="text-xs font-medium text-slate-300 mb-2">What kind of system is it?</legend>
+        <div className="grid md:grid-cols-2 gap-3">
+          {([
+            ["llm", "LLM or generative assistant", "Chatbots, summarisers, report writers and other systems that produce text. You audit a log of prompts and answers."],
+            ["tabular", "Tabular classifier", "Scores or decisions from structured data, such as credit, hiring or risk models. You audit a table of predictions."],
+          ] as const).map(([value, title, hint]) => (
+            <label key={value} className={`rounded-lg border p-3 cursor-pointer ${type === value ? "border-cyan-500/60 bg-cyan-500/10" : "border-white/10 hover:bg-white/5"}`}>
+              <input type="radio" name="system_type" value={value} checked={type === value} onChange={() => setType(value)} className="sr-only" />
+              <span className="block text-sm font-semibold text-slate-100">{title}{value === "llm" && <span className="ml-2 text-[10px] uppercase text-cyan-300">default</span>}</span>
+              <span className="block text-xs text-slate-400 mt-1">{hint}</span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
       <div className="grid md:grid-cols-2 gap-4">
         <Field label="System name" htmlFor="name">
           <input id="name" name="name" required maxLength={200} className={inputClass} />
@@ -94,6 +112,11 @@ export function SystemForm({ people }: { people: Person[] }) {
         <label className="flex items-center gap-2 text-sm text-slate-200">
           <input type="checkbox" name="automated_decision" className={check} /> It makes or drives decisions about people
         </label>
+        {type === "llm" && (
+          <label className="flex items-center gap-2 text-sm text-slate-200">
+            <input type="checkbox" name="citations" className={check} /> Answers must cite their sources
+          </label>
+        )}
         <label className="flex items-center gap-2 text-sm text-slate-200">
           <input type="checkbox" name="children" className={check} /> It processes data of people under 18
         </label>

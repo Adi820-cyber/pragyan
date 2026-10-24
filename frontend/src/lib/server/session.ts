@@ -3,7 +3,12 @@ import { cookies } from "next/headers";
 
 export const TOKEN_COOKIE = "reskure_token";
 export const TENANT_COOKIE = "reskure_tenant";
-export const API_BASE = process.env.API_BASE_URL ?? "http://localhost:8000/api/v1";
+function getApiBase() {
+  const raw = process.env.API_BASE_URL ?? "http://localhost:8000/api/v1";
+  const trimmed = raw.replace(/\/+$/, "");
+  return trimmed.endsWith("/api/v1") ? trimmed : `${trimmed}/api/v1`;
+}
+export const API_BASE = getApiBase();
 
 const MAX_AGE_SECONDS = 60 * 60 * 12;
 

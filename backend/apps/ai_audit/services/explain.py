@@ -118,7 +118,51 @@ def eta(values: pd.Series, groups: pd.Series) -> Optional[float]:
     return float(np.sqrt(between / total))
 
 
+MAX_SAFE_STRING = 0  # text values are never stored in explanation examples
+
+
+def safe_feature_values(values: dict, pii_columns: set[str]) -> dict:
+    """Keep only numeric / boolean values of columns not flagged as personal data.
+
+    Examples are stored in results and reports, so raw text and identifiers are withheld.
+    """
+    from apps.ai_audit.services.privacy import NAME_HINTS
+
+    out: dict = {}
+    for name, value in (values or {}).items():
+        flagged = name in pii_columns or any(p.search(str(name)) for p in NAME_HINTS.values())
+        if flagged:
+            out[name] = "(withheld: personal data)"
+        elif isinstance(value, bool) or isinstance(value, (int, float)):
+            out[name] = value
+        else:
+            out[name] = "(text withheld)"
+    return out
+
+
+def recompute_additivity(local: list[dict], base_value: float) -> Optional[float]:
+    """Largest |base + sum(contributions) - output| over the example rows. None if there are none."""
+    errors = []
+    for item in local:
+        contributions = item.get("contributions") or {}
+        base = float(item.get("base_value", base_value))
+        errors.append(abs(base + sum(float(v) for v in contributions.values()) - float(item["output"])))
+    return max(errors) if errors else None
+
+
 def _results_from_explanation(exp: dict, cfg: dict, df_for_groups: Optional[pd.DataFrame], origin: str) -> list[Result]:
+    from apps.ai_audit.services.privacy import scan_dataframe
+
+    pii_columns: set[str] = set()
+    if df_for_groups is not None:
+        pii_columns = {f["column"] for f in scan_dataframe(df_for_groups, merged_thresholds(cfg)["pii_value_match_share"])}
+    exp = {
+        **exp,
+        "local_explanations": [
+            {**ex, "feature_values": safe_feature_values(ex.get("feature_values", {}), pii_columns)}
+            for ex in exp.get("local_explanations", [])
+        ],
+    }
     th = merged_thresholds(cfg)
     unit = exp["output_unit"]
     results: list[Result] = []
@@ -213,16 +257,16 @@ def _results_from_explanation(exp: dict, cfg: dict, df_for_groups: Optional[pd.D
 
 
 def run_explainability_sample(sample_key: str, ref: pd.DataFrame, cfg: dict) -> list[Result]:
-    from apps.ai_audit.sample.generate import SAMPLE_MODELS, get_model
+    from apps.ai_audit.sample.registry import features_for, known_keys, model_for
 
-    if sample_key not in SAMPLE_MODELS:
+    if sample_key not in known_keys():
         return [Result(CATEGORY, "global_importance", "mean_abs_shap", "error", summary=f"Unknown built-in model '{sample_key}'.")]
-    features = SAMPLE_MODELS[sample_key]
+    features = features_for(sample_key)
     missing = [f for f in features if f not in ref.columns]
     if missing:
         return [Result(CATEGORY, "global_importance", "mean_abs_shap", "error",
                        summary=f"The reference dataset is missing model inputs: {missing}.")]
-    model = get_model(sample_key)
+    model = model_for(sample_key)
     # Keep group values aligned with the explained rows by sampling the full frame once.
     frame = ref if len(ref) <= MAX_EXPLAIN_ROWS else ref.sample(MAX_EXPLAIN_ROWS, random_state=int(cfg.get("seed", 42)))
     frame = frame.reset_index(drop=True)
@@ -283,16 +327,31 @@ def validate_bundle(payload: Any) -> dict:
 
 def run_explainability_bundle(payload: dict, ref: pd.DataFrame, cfg: dict) -> list[Result]:
     payload = validate_bundle(payload)
+    # Never trust the bundle's own claim: recompute the self-check from the numbers it contains.
+    claimed = float(payload["additivity_max_error"])
+    recomputed = recompute_additivity(payload.get("local_explanations", []), float(payload["base_value"]))
+    effective_error = claimed if recomputed is None else max(claimed, recomputed)
     exp = {
         "n_rows": payload["n_rows"],
         "features": payload["features"],
         "output_unit": payload["output_unit"],
         "base_value": float(payload["base_value"]),
-        "additivity_max_error": float(payload["additivity_max_error"]),
+        "additivity_max_error": effective_error,
         "global_importance": sorted(payload["global_importance"], key=lambda i: -i["mean_abs_shap"]),
         "local_explanations": payload.get("local_explanations", []),
     }
     results = _results_from_explanation(exp, cfg, ref, "local_bundle")
+    for r in results:
+        if r.check_key == "additivity":
+            r.detail.update({"claimed_error": claimed, "recomputed_on_examples": recomputed,
+                             "verified_rows": len(payload.get("local_explanations", []))})
+            if recomputed is not None and recomputed > ADDITIVITY_TOLERANCE >= claimed:
+                r.summary = (
+                    f"The bundle claimed an error of {claimed:.1e}, but its own example rows do not add up "
+                    f"(error {recomputed:.1e}). Treat these explanations as unreliable."
+                )
+            elif r.state == NO_ALERT:
+                r.summary += f" Re-checked by the server on {len(payload.get('local_explanations', []))} example rows from the bundle."
     producer = payload["producer"]
     results.append(
         Result(

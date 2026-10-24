@@ -51,13 +51,14 @@
   <tr><th>Intended population</th><td>{{ report.system.intended_population|default:"Not stated" }}</td></tr>
   <tr><th>Owner / reviewer</th><td>{{ report.system.owner|default:"Not assigned" }} / {{ report.system.reviewer|default:"Not assigned" }}</td></tr>
   <tr><th>Jurisdictions assessed</th><td>{{ report.system.jurisdictions|join:", "|default:"None selected" }}</td></tr>
-  <tr><th>Model</th><td>{{ report.model_version.label }} ({{ report.model_version.source_label }}){% if report.model_version.model_type %}, {{ report.model_version.model_type }}{% endif %}</td></tr>
-  <tr><th>Group columns / outcome</th><td>{{ report.run.config.group_columns|join:", "|default:"None declared" }} / favourable label {{ report.run.config.favourable_label }}{% if report.run.config.label_column %}, outcomes in {{ report.run.config.label_column }}{% else %}, no outcome column{% endif %}</td></tr>
+  <tr><th>System type</th><td>{{ report.system.system_type_label }}</td></tr>
+  <tr><th>Model</th><td>{{ report.model_version.label }} ({{ report.model_version.source_label }}){% if report.model_version.model_type %}, {{ report.model_version.model_type }}{% endif %}{% if report.model_version.provider %}, provider {{ report.model_version.provider }}{% endif %}{% if report.model_version.model_name %} / {{ report.model_version.model_name }}{% endif %}{% if report.model_version.prompt_version %}, prompt version {{ report.model_version.prompt_version }}{% endif %}</td></tr>
+  <tr><th>Groups compared</th><td>{{ report.run.config.group_columns|join:", "|default:"None declared" }}{% if report.system.system_type == "tabular" %} / favourable label {{ report.run.config.favourable_label }}{% if report.run.config.label_column %}, outcomes in {{ report.run.config.label_column }}{% else %}, no outcome column{% endif %}{% endif %}</td></tr>
 </table>
 <table>
   <tr><th>Dataset</th><th>Rows</th><th>Period</th><th>SHA-256</th></tr>
   {% for d in report.datasets %}
-  <tr><td>{{ d.role|title }}: {{ d.name }}{% if d.is_sample %} <span class="badge s-not_applicable">sample data</span>{% endif %}</td><td>{{ d.row_count }}</td><td>{{ d.period_start|default:"?" }} to {{ d.period_end|default:"?" }}</td><td><code>{{ d.sha256 }}</code></td></tr>
+  <tr><td>{{ d.role|title }}: {{ d.name }}{% if d.is_real_data %} <span class="badge s-not_applicable">real public data</span>{% elif d.is_sample %} <span class="badge s-not_applicable">synthetic sample data</span>{% endif %}{% if d.source_note %}<br><span class="muted">{{ d.source_note }}</span>{% endif %}</td><td>{{ d.row_count }}</td><td>{{ d.period_start|default:"?" }} to {{ d.period_end|default:"?" }}</td><td><code>{{ d.sha256 }}</code></td></tr>
   {% endfor %}
 </table>
 
@@ -114,6 +115,25 @@
 </table>
 {% endif %}
 {% endfor %}
+
+{% if report.dependencies %}
+<h2>Vendors and processors (as declared at audit time)</h2>
+<table>
+  <tr><th>Vendor</th><th>Role</th><th>Personal data</th><th>Contract</th><th>Trains on your data</th><th>Exit plan</th><th>Last reviewed</th></tr>
+  {% for d in report.dependencies %}
+  <tr><td>{{ d.name }}{% if d.service %}<br><span class="muted">{{ d.service }}</span>{% endif %}</td><td>{{ d.role }}</td><td>{{ d.personal_data_shared|yesno:"Shared,Not shared" }}</td><td>{{ d.contract_in_place|yesno:"On record,None on record" }}</td><td>{{ d.trains_on_customer_data|title }}</td><td>{{ d.exit_plan|yesno:"Yes,No" }}</td><td>{{ d.last_reviewed|default:"Never" }}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+{% if report.rights %}
+<h2>Data-subject rights handling (as declared at audit time)</h2>
+<table>
+  <tr><th>Right</th><th>Procedure</th><th>Owner</th><th>Channel</th><th>Last tested</th><th>Requests in 12 months (on time)</th></tr>
+  {% for p in report.rights %}
+  <tr><td>{{ p.right }}</td><td>{{ p.procedure_exists|yesno:"Yes,No" }}</td><td>{{ p.owner|default:"None" }}</td><td>{{ p.channel|default:"None" }}</td><td>{{ p.last_tested|default:"Never" }}</td><td>{{ p.requests_12m }} ({{ p.closed_on_time_12m }})</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
 
 <h2>Control checklist (DPDP / GDPR readiness)</h2>
 {% if report.controls %}

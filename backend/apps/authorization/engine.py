@@ -173,6 +173,20 @@ class PolicyEngine:
         fallback_role_map["COMPLIANCE_OFFICER"].append("ai.")
         fallback_role_map["RISK_OWNER"] += ["ai.read", "ai.create", "ai.update"]
         fallback_role_map["AUDITOR"].append("ai.read")
+        # Network topology: everyone with a role may look and trace; editing is for reviewers and administrators.
+        fallback_role_map["COMPLIANCE_OFFICER"].append("network.")
+        for _role in ("RISK_OWNER", "AUDITOR", "CONTRIBUTOR"):
+            fallback_role_map[_role].append("network.read")
+        # CISO Assistant: read for any role; status/risk edits for risk-owning and review roles.
+        fallback_role_map["COMPLIANCE_OFFICER"].append("ciso.")
+        fallback_role_map["RISK_OWNER"] += ["ciso.read", "ciso.create", "ciso.update"]
+        for _role in ("AUDITOR", "CONTRIBUTOR"):
+            fallback_role_map[_role].append("ciso.read")
+        # Cloud Security & Assets: reviewers and risk owners can view/scan/remediate; auditors/contributors can read.
+        fallback_role_map["COMPLIANCE_OFFICER"].append("asset.")
+        fallback_role_map["RISK_OWNER"] += ["asset.read", "asset.create", "asset.update"]
+        for _role in ("AUDITOR", "CONTRIBUTOR"):
+            fallback_role_map[_role].append("asset.read")
         allowed_prefixes = fallback_role_map.get(actor_role, [])
         for prefix in allowed_prefixes:
             if permission_code.startswith(prefix):

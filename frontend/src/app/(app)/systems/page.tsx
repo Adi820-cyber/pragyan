@@ -25,8 +25,8 @@ export default async function SystemsPage() {
       {failure && <ErrorState message={failure} />}
       {!failure && systems.length === 0 && (
         <EmptyState title="No AI systems yet">
-          <p className="mb-3">Register your first system below, or load the synthetic example.</p>
-          <LoadSampleButton />
+          <p className="mb-3">Register your first system below, or load an example.</p>
+          <div className="flex flex-wrap items-center justify-center gap-3"><LoadSampleButton scenario="finsum" /><LoadSampleButton scenario="compas" /></div>
         </EmptyState>
       )}
       {systems.length > 0 && (

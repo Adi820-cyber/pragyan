@@ -144,6 +144,61 @@ def scan_dataframe(df: pd.DataFrame, match_share_threshold: float = 0.5, seed: i
     return findings
 
 
+# ---- free text (LLM prompts, outputs, retrieved context) ------------------------------
+TEXT_PATTERNS = {
+    "email": re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"),
+    "phone": re.compile(r"(?<![\d.])(?:\+91[\-\s]?|91[\-\s]?|0)?[6-9]\d{9}(?!\d)"),
+    "pan": re.compile(r"\b[A-Z]{5}[0-9]{4}[A-Z]\b"),
+    "aadhaar": re.compile(r"(?<!\d)[2-9]\d{3}\s?\d{4}\s?\d{4}(?!\d)"),
+    "ip_address": re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
+}
+
+
+def find_pii_in_text(text) -> list[tuple[str, str]]:
+    """(kind, value) pairs found inside free text. Values are for in-memory comparison only; never store them."""
+    if not isinstance(text, str) or not text:
+        return []
+    found: list[tuple[str, str]] = []
+    for kind, pattern in TEXT_PATTERNS.items():
+        for match in pattern.finditer(text):
+            value = match.group(0)
+            if kind == "aadhaar" and not is_aadhaar(value):
+                continue
+            if kind == "ip_address" and not IPV4_RE.match(value):
+                continue
+            found.append((kind, value))
+    return found
+
+
+def scan_text_column(series: pd.Series, reference_texts: Optional[list[pd.Series]] = None, seed: int = 42) -> dict:
+    """Count rows whose text contains personal-data patterns.
+
+    With `reference_texts` (for example the prompt and retrieved context for an output), also counts rows where
+    the value appears in the text but not in any reference: the system surfaced personal data it was not given.
+    """
+    sample = series if len(series) <= MAX_SCAN_ROWS else series.sample(MAX_SCAN_ROWS, random_state=seed)
+    kinds: dict[str, int] = {}
+    rows_with = 0
+    surfaced = 0
+    samples: list[str] = []
+    for idx, text in sample.items():
+        hits = find_pii_in_text(text)
+        if not hits:
+            continue
+        rows_with += 1
+        for kind, _ in {(k, v) for k, v in hits}:
+            kinds[kind] = kinds.get(kind, 0) + 1
+        if reference_texts:
+            refs = " ".join(str(r.get(idx, "")) for r in reference_texts)
+            if any(value not in refs for _, value in hits):
+                surfaced += 1
+        if len(samples) < 3:
+            kind, value = hits[0]
+            samples.append(mask_value(kind, value))
+    return {"scanned_rows": int(len(sample)), "rows_with_pii": rows_with, "kinds": kinds,
+            "surfaced_rows": surfaced, "masked_samples": samples}
+
+
 def run_privacy_checks(
     datasets: dict[str, pd.DataFrame], cfg: dict, prescan: Optional[dict[str, list[dict]]] = None
 ) -> list[Result]:
@@ -210,6 +265,22 @@ def run_privacy_checks(
     ref = datasets.get("reference")
     if date_col and days and ref is not None and date_col in ref.columns:
         parsed = pd.to_datetime(ref[date_col], errors="coerce")
+        usable = int(parsed.notna().sum())
+        total = int(ref[date_col].notna().sum())
+        bad_share = 1 - usable / total if total else 1.0
+        if usable == 0 or bad_share > 0.05:
+            results.append(
+                Result(
+                    CATEGORY, "retention", "rows_past_retention", INSUFFICIENT, subject=date_col,
+                    support_n=usable,
+                    summary=(
+                        f"Only {usable} of {total} values in '{date_col}' could be read as dates, so retention cannot be assessed. "
+                        "Fix the date format and run the audit again."
+                    ),
+                    detail={"usable_dates": usable, "non_empty_values": total},
+                )
+            )
+            return results
         cutoff = pd.Timestamp(date.today() - timedelta(days=int(days)))
         overdue = int((parsed < cutoff).sum())
         results.append(

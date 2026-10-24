@@ -24,7 +24,7 @@ export default async function NewAuditPage({ searchParams }: PageProps<"/audits/
   }
 
   return (
-    <PageShell title="New audit" subtitle="Pick the inputs, say what the columns mean, and review the policy before anything runs" sample={datasets.some((d) => d.is_sample)}>
+    <PageShell title="New audit" subtitle="Pick the inputs, say what the columns mean, and review the policy before anything runs" sample={datasets.some((d) => d.is_sample && !d.is_real_data)} realData={datasets.find((d) => d.is_real_data) ? { source: datasets.find((d) => d.is_real_data)!.source_note } : false}>
       {failure ? (
         <ErrorState message={failure} />
       ) : (

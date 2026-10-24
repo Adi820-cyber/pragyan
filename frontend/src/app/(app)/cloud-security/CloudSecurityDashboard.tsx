@@ -65,6 +65,7 @@ export function CloudSecurityDashboard({ overview, accounts, scans, findings }: 
   // Form states
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<{ text: string; tone: "ok" | "bad" } | null>(null);
   const [testingAccountId, setTestingAccountId] = useState<string | null>(null);
   const [connectionTestResult, setConnectionTestResult] = useState<{
     accountId: string;
@@ -104,10 +105,10 @@ export function CloudSecurityDashboard({ overview, accounts, scans, findings }: 
       if (res.ok) {
         router.refresh();
       } else {
-        alert("Failed to seed demo data");
+        setStatusMessage({ text: "Failed to seed demo data.", tone: "bad" });
       }
     } catch {
-      alert("Error contacting server");
+      setStatusMessage({ text: "Error contacting server.", tone: "bad" });
     } finally {
       setIsSubmitting(false);
     }
@@ -137,10 +138,10 @@ export function CloudSecurityDashboard({ overview, accounts, scans, findings }: 
         router.refresh();
       } else {
         const err = await res.json();
-        alert(err.detail || "Failed to create cloud account");
+        setStatusMessage({ text: err.detail || "Failed to create cloud account.", tone: "bad" });
       }
     } catch {
-      alert("Error connecting cloud account");
+      setStatusMessage({ text: "Error connecting cloud account.", tone: "bad" });
     } finally {
       setIsSubmitting(false);
     }
@@ -158,7 +159,7 @@ export function CloudSecurityDashboard({ overview, accounts, scans, findings }: 
       const data = await res.json();
       setConnectionTestResult({
         accountId,
-        message: data.message || "Connection verified successfully.",
+        message: data.message || "Account ID format accepted. No live call was made.",
         ok: res.ok,
       });
     } catch {
@@ -177,7 +178,7 @@ export function CloudSecurityDashboard({ overview, accounts, scans, findings }: 
     e.preventDefault();
     const targetAccountId = effectiveScanAccountId;
     if (!targetAccountId) {
-      alert("Please connect or select a cloud account first.");
+      setStatusMessage({ text: "Please connect or select a cloud account first.", tone: "bad" });
       return;
     }
 
@@ -195,10 +196,10 @@ export function CloudSecurityDashboard({ overview, accounts, scans, findings }: 
         setShowScanModal(false);
         router.refresh();
       } else {
-        alert("Failed to initiate scan");
+        setStatusMessage({ text: "Failed to initiate scan.", tone: "bad" });
       }
     } catch {
-      alert("Error triggering scan");
+      setStatusMessage({ text: "Error triggering scan.", tone: "bad" });
     } finally {
       setIsSubmitting(false);
     }
@@ -217,7 +218,7 @@ export function CloudSecurityDashboard({ overview, accounts, scans, findings }: 
         router.refresh();
       }
     } catch {
-      alert("Scan failed");
+      setStatusMessage({ text: "Scan failed.", tone: "bad" });
     } finally {
       setIsSubmitting(false);
     }
@@ -239,7 +240,7 @@ export function CloudSecurityDashboard({ overview, accounts, scans, findings }: 
         router.refresh();
       }
     } catch {
-      alert("Failed to update finding status");
+      setStatusMessage({ text: "Failed to update finding status.", tone: "bad" });
     } finally {
       setIsSubmitting(false);
     }
@@ -276,6 +277,16 @@ export function CloudSecurityDashboard({ overview, accounts, scans, findings }: 
 
   return (
     <div className="space-y-6">
+      <div role="note" className="p-3 rounded-xl border border-amber-500/40 bg-amber-950/30 text-amber-200 text-xs">
+        Simulated results: scans run the built-in Prowler-style rule catalogue against sample accounts. No call is made to
+        AWS, Azure or Google Cloud, so these findings do not describe a real environment.
+      </div>
+      {statusMessage && (
+        <div role="alert" className={`p-3 rounded-xl border text-xs flex items-center justify-between ${statusMessage.tone === "ok" ? "border-emerald-500/40 bg-emerald-950/30 text-emerald-200" : "border-rose-500/40 bg-rose-950/40 text-rose-200"}`}>
+          <span>{statusMessage.text}</span>
+          <button type="button" onClick={() => setStatusMessage(null)} className="text-slate-400 hover:text-white ml-3">✕</button>
+        </div>
+      )}
       {/* Top Banner & Main Controls */}
       <div className="glass-panel p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-l-4 border-l-cyan-500 shadow-xl shadow-cyan-950/20">
         <div className="space-y-1">
@@ -374,7 +385,7 @@ export function CloudSecurityDashboard({ overview, accounts, scans, findings }: 
                   : "No Scans"}
               </div>
               <div className="text-[11px] text-slate-400">
-                {overview.total_accounts > 0 ? `${overview.overall_score}% compliant` : "Pending initial scan"}
+                {overview.total_accounts > 0 ? `${overview.overall_score}% of checks passed` : "Pending initial scan"}
               </div>
             </div>
           </div>
@@ -419,7 +430,7 @@ export function CloudSecurityDashboard({ overview, accounts, scans, findings }: 
             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
           </div>
           <div className="text-3xl font-extrabold text-emerald-400 my-1">{overview.status_counts.PASS}</div>
-          <div className="text-[11px] text-slate-500">Verified compliant</div>
+          <div className="text-[11px] text-slate-500">Checks passed (simulated)</div>
         </div>
 
         {/* Multi-cloud Accounts */}

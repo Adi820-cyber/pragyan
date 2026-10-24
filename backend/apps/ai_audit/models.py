@@ -7,6 +7,7 @@ from apps.ai_audit.storage import dataset_upload_path, evidence_upload_path, pri
 
 class AISystem(TenantScopedModel):
     STATUS_CHOICES = [("ACTIVE", "Active"), ("ARCHIVED", "Archived")]
+    TYPE_CHOICES = [("llm", "LLM / generative system"), ("tabular", "Tabular classifier")]
 
     name = models.CharField(max_length=200)
     purpose = models.TextField()
@@ -18,6 +19,8 @@ class AISystem(TenantScopedModel):
     automated_decision = models.BooleanField(default=False, help_text="Decisions about people are made or driven automatically.")
     processes_children_data = models.BooleanField(default=False)
     is_significant_data_fiduciary = models.BooleanField(default=False)
+    system_type = models.CharField(max_length=10, choices=TYPE_CHOICES, default="llm")
+    requires_citations = models.BooleanField(default=False, help_text="Outputs must cite their sources (LLM systems).")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="ACTIVE")
 
     class Meta:
@@ -33,6 +36,8 @@ class ModelVersion(TenantScopedModel):
         ("server_sample", "Built-in sample model (server-computed explanations)"),
         ("local_bundle", "Customer model (explanations from local audit tool)"),
         ("predictions_only", "Predictions only (no explanations)"),
+        ("llm_hosted", "Hosted LLM (provider API)"),
+        ("llm_self_hosted", "Self-hosted LLM"),
     ]
 
     system = models.ForeignKey(AISystem, on_delete=models.CASCADE, related_name="model_versions")
@@ -40,6 +45,9 @@ class ModelVersion(TenantScopedModel):
     source = models.CharField(max_length=30, choices=SOURCE_CHOICES, default="predictions_only")
     sample_key = models.CharField(max_length=50, blank=True, help_text="Built-in sample model key, for server_sample only.")
     model_type = models.CharField(max_length=100, blank=True)
+    provider = models.CharField(max_length=100, blank=True, help_text="LLM provider, for LLM systems.")
+    model_name = models.CharField(max_length=100, blank=True, help_text="Provider model name or id.")
+    prompt_version = models.CharField(max_length=100, blank=True, help_text="Version of the prompt template or pipeline.")
     feature_columns = models.JSONField(default=list)
     favourable_label = models.CharField(max_length=50, default="1")
     threshold = models.FloatField(default=0.5)
@@ -71,6 +79,9 @@ class Dataset(TenantScopedModel):
     period_start = models.DateField(null=True, blank=True)
     period_end = models.DateField(null=True, blank=True)
     is_sample = models.BooleanField(default=False)
+    is_real_data = models.BooleanField(default=False, help_text="Sample data that is real public data, not synthetic.")
+    sample_config = models.JSONField(null=True, blank=True, help_text="Pre-filled column mapping, for sample data only.")
+    source_note = models.CharField(max_length=300, blank=True, help_text="Where sample data came from.")
     uploaded_by = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="uploaded_datasets")
     delete_after = models.DateField(null=True, blank=True)
 
@@ -113,6 +124,9 @@ class AuditRun(TenantScopedModel):
     config = models.JSONField(default=dict)
     control_pack_versions = models.JSONField(default=dict)
     library_versions = models.JSONField(default=dict)
+    # System, model, dataset and control details as they were when the audit completed.
+    # Reports read this, so later edits cannot rewrite a historical report.
+    context_snapshot = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="queued", db_index=True)
     progress = models.PositiveSmallIntegerField(default=0)
     progress_message = models.CharField(max_length=200, blank=True)
@@ -138,7 +152,9 @@ class CheckResult(TenantScopedModel):
         ("bias", "Bias"),
         ("drift", "Drift"),
         ("explainability", "Explainability"),
+        ("grounding", "Groundedness and traceability"),
         ("privacy", "Privacy"),
+        ("governance", "Vendors, rights and oversight"),
     ]
     STATE_CHOICES = [
         ("no_alert", "No alert under selected policy"),
@@ -147,7 +163,11 @@ class CheckResult(TenantScopedModel):
         ("not_applicable", "Not applicable"),
         ("error", "Error"),
     ]
-    ORIGIN_CHOICES = [("server", "Computed by server"), ("local_bundle", "Supplied by local tool")]
+    ORIGIN_CHOICES = [
+        ("server", "Computed by server"),
+        ("local_bundle", "Supplied by local tool"),
+        ("declared", "Declared by the organisation"),
+    ]
 
     run = models.ForeignKey(AuditRun, on_delete=models.CASCADE, related_name="results")
     category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, db_index=True)
@@ -265,3 +285,70 @@ class ControlEvidence(TenantScopedModel):
     class Meta:
         db_table = "ai_control_evidence"
         ordering = ["-created_at"]
+
+
+class Dependency(TenantScopedModel):
+    """A vendor, cloud service or processor the AI system depends on."""
+
+    ROLE_CHOICES = [
+        ("model_provider", "Model / LLM provider"),
+        ("cloud", "Cloud or hosting"),
+        ("data_labelling", "Data labelling or annotation"),
+        ("analytics", "Analytics or monitoring"),
+        ("other", "Other"),
+    ]
+    TRAINING_CHOICES = [("yes", "Yes"), ("no", "No"), ("unknown", "Unknown")]
+    CRITICALITY_CHOICES = [("low", "Low"), ("medium", "Medium"), ("high", "High")]
+
+    system = models.ForeignKey(AISystem, on_delete=models.CASCADE, related_name="dependencies")
+    name = models.CharField(max_length=200)
+    service = models.CharField(max_length=200, blank=True)
+    role = models.CharField(max_length=30, choices=ROLE_CHOICES, default="model_provider")
+    personal_data_shared = models.BooleanField(default=False)
+    data_categories = models.JSONField(default=list, blank=True)
+    region = models.CharField(max_length=100, blank=True)
+    outside_india = models.BooleanField(default=False)
+    outside_eea = models.BooleanField(default=False)
+    transfer_mechanism = models.CharField(max_length=300, blank=True)
+    contract_in_place = models.BooleanField(default=False)
+    contract_reviewed_on = models.DateField(null=True, blank=True)
+    trains_on_customer_data = models.CharField(max_length=10, choices=TRAINING_CHOICES, default="unknown")
+    retention_days = models.PositiveIntegerField(null=True, blank=True)
+    subprocessors_listed = models.BooleanField(default=False)
+    exit_plan = models.BooleanField(default=False)
+    criticality = models.CharField(max_length=10, choices=CRITICALITY_CHOICES, default="medium")
+    last_reviewed = models.DateField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        db_table = "ai_dependency"
+        ordering = ["name"]
+
+
+class RightsProcess(TenantScopedModel):
+    """How one data-subject right is handled for this AI system."""
+
+    RIGHT_CHOICES = [
+        ("access", "Access to data"),
+        ("correction", "Correction of data"),
+        ("erasure", "Erasure of data"),
+        ("withdraw_consent", "Withdrawal of consent"),
+        ("grievance", "Grievance redressal"),
+        ("human_review", "Human review of an automated decision"),
+    ]
+
+    system = models.ForeignKey(AISystem, on_delete=models.CASCADE, related_name="rights_processes")
+    right = models.CharField(max_length=30, choices=RIGHT_CHOICES)
+    procedure_exists = models.BooleanField(default=False)
+    owner = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="rights_processes")
+    channel = models.CharField(max_length=300, blank=True, help_text="Where a person makes the request.")
+    sla_days = models.PositiveIntegerField(null=True, blank=True)
+    last_tested = models.DateField(null=True, blank=True)
+    requests_12m = models.PositiveIntegerField(default=0)
+    closed_on_time_12m = models.PositiveIntegerField(default=0)
+    evidence_note = models.TextField(blank=True)
+
+    class Meta:
+        db_table = "ai_rights_process"
+        ordering = ["right"]
+        constraints = [models.UniqueConstraint(fields=["system", "right"], name="unique_right_per_system")]

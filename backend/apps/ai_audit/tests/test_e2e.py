@@ -30,7 +30,7 @@ class EndToEndAuditTests(AuditTestCase):
         run = owner.get(f"/api/v1/ai/runs/{run_id}/").json()
         self.assertEqual(run["status"], "completed", run.get("error"))
         counts = run["state_counts"]
-        self.assertEqual(set(counts), {"bias", "drift", "explainability", "privacy"})
+        self.assertEqual(set(counts), {"bias", "drift", "explainability", "privacy", "governance"})
         self.assertIn("review_required", counts["bias"])
         self.assertIn("review_required", counts["drift"])
         self.assertIn("review_required", counts["privacy"])
@@ -66,7 +66,7 @@ class EndToEndAuditTests(AuditTestCase):
         self.assertIn("default-src 'none'", html["Content-Security-Policy"])
         self.assertEqual(html["X-Content-Type-Options"], "nosniff")
         report = owner.get(f"/api/v1/ai/runs/{run_id}/report.json/").json()
-        self.assertEqual(set(report["coverage"]), {"bias", "drift", "explainability", "privacy"})
+        self.assertEqual(set(report["coverage"]), {"bias", "drift", "explainability", "privacy", "governance"})
 
         # Rerun with v2 (same held-out data): the gap narrows and the diff shows it.
         run2 = self._start_run(owner, system, "v2")

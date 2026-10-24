@@ -93,12 +93,17 @@ router.register(r"ai/systems", ai.AISystemViewSet, basename="ai-system")
 router.register(r"ai/model-versions", ai.ModelVersionViewSet, basename="ai-model-version")
 router.register(r"ai/datasets", ai.DatasetViewSet, basename="ai-dataset")
 router.register(r"ai/runs", ai.AuditRunViewSet, basename="ai-run")
+router.register(r"ai/dependencies", ai.DependencyViewSet, basename="ai-dependency")
+router.register(r"ai/rights-processes", ai.RightsProcessViewSet, basename="ai-rights-process")
 router.register(r"ai/findings", ai.FindingViewSet, basename="ai-finding")
 router.register(r"ai/control-assessments", ai.ControlAssessmentViewSet, basename="ai-control-assessment")
 router.register(r"ai/control-evidence", ai.ControlEvidenceViewSet, basename="ai-control-evidence")
 
 # NetBox-style Network & Data Path Traversal
 from apps.network import views as net
+
+# CISO Assistant GRC Suite
+from apps.ciso_assistant import views as ciso
 
 router.register(r"network/devices", net.NetworkDeviceViewSet, basename="network-device")
 router.register(r"network/interfaces", net.DeviceInterfaceViewSet, basename="network-interface")
@@ -119,6 +124,15 @@ urlpatterns = [
     path("api/v1/network/trace/", net.PacketTraceView.as_view(), name="network-packet-trace"),
     path("api/v1/network/topology/", net.NetworkTopologyView.as_view(), name="network-topology"),
     path("api/v1/network/demo/seed/", net.NetworkSeedDemoView.as_view(), name="network-seed-demo"),
+    
+    # CISO Assistant Community GRC Suite
+    path("api/v1/ciso/overview/", ciso.CisoOverviewView.as_view(), name="ciso-overview"),
+    path("api/v1/ciso/frameworks/", ciso.CisoFrameworksView.as_view(), name="ciso-frameworks"),
+    path("api/v1/ciso/controls/", ciso.CisoControlsView.as_view(), name="ciso-controls"),
+    path("api/v1/ciso/crosswalks/", ciso.CisoCrosswalkView.as_view(), name="ciso-crosswalks"),
+    path("api/v1/ciso/risks/", ciso.CisoRisksView.as_view(), name="ciso-risks"),
+    path("api/v1/ciso/gaps/", ciso.CisoGapAnalysisView.as_view(), name="ciso-gaps"),
+    path("api/v1/ciso/seed/", ciso.CisoResetCatalogView.as_view(), name="ciso-seed"),
     path("api/v1/cloud-security/", include("apps.cloud_security.urls")),
     path("api/v1/", include(router.urls)),
 

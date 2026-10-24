@@ -1,10 +1,10 @@
-from django.contrib.auth import authenticate
+from django.contrib.auth import authenticate, get_user_model
 from rest_framework import permissions, serializers, status
 from rest_framework.authtoken.models import Token
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.models import Membership
+from apps.core.models import Membership, Tenant
 
 
 class LoginSerializer(serializers.Serializer):
@@ -21,7 +21,48 @@ def _membership_payload(m: Membership) -> dict:
     }
 
 
+def _ensure_membership_for_admin(user) -> None:
+    """Ensure superusers or 'admin' accounts created via CLI have an active tenant membership."""
+    if not user or not user.is_active:
+        return
+    has_active = Membership.all_objects.filter(
+        user=user, status="ACTIVE", tenant__status="ACTIVE"
+    ).exists()
+    if has_active:
+        return
+    if user.is_superuser or user.is_staff or user.get_username().lower() in ("admin", "admin@hirelens.example"):
+        tenant = (
+            Tenant.objects.filter(slug="hirelens-demo", status="ACTIVE").first()
+            or Tenant.objects.filter(status="ACTIVE").order_by("created_at").first()
+        )
+        if tenant is None:
+            tenant = Tenant.objects.create(
+                slug="hirelens-demo",
+                name="HireLens (demo)",
+                status="ACTIVE",
+                region="us-east-1",
+            )
+        email = user.email or f"{user.get_username()}@hirelens.example"
+        existing_by_email = Membership.all_objects.filter(tenant=tenant, email=email).first()
+        if existing_by_email:
+            existing_by_email.user = user
+            existing_by_email.status = "ACTIVE"
+            if user.is_superuser or user.get_username().lower().startswith("admin"):
+                existing_by_email.role = "TENANT_ADMIN"
+            existing_by_email.save()
+        else:
+            Membership.all_objects.create(
+                tenant=tenant,
+                user=user,
+                email=email,
+                full_name=user.get_full_name() or "Operations Admin",
+                role="TENANT_ADMIN",
+                status="ACTIVE",
+            )
+
+
 def _user_payload(user) -> dict:
+    _ensure_membership_for_admin(user)
     memberships = (
         Membership.all_objects.filter(user=user, status="ACTIVE", tenant__status="ACTIVE")
         .select_related("tenant")
@@ -35,6 +76,31 @@ def _user_payload(user) -> dict:
     }
 
 
+def _authenticate_flexible(request, raw_username: str, password: str):
+    """Authenticate by exact username, short alias (e.g. 'admin' -> 'admin@hirelens.example'), or email."""
+    user = authenticate(request, username=raw_username, password=password)
+    if user is not None:
+        return user
+
+    User = get_user_model()
+    candidates = []
+    if "@" not in raw_username:
+        candidates.append(f"{raw_username}@hirelens.example")
+    else:
+        short = raw_username.split("@", 1)[0]
+        candidates.append(short)
+
+    by_email = User.objects.filter(email__iexact=raw_username).first()
+    if by_email:
+        candidates.append(by_email.get_username())
+
+    for cand in candidates:
+        user = authenticate(request, username=cand, password=password)
+        if user is not None:
+            return user
+    return None
+
+
 class LoginView(APIView):
     authentication_classes: list = []
     permission_classes = [permissions.AllowAny]
@@ -43,10 +109,10 @@ class LoginView(APIView):
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = authenticate(
+        user = _authenticate_flexible(
             request,
-            username=serializer.validated_data["username"],
-            password=serializer.validated_data["password"],
+            serializer.validated_data["username"].strip(),
+            serializer.validated_data["password"],
         )
         if user is None or not user.is_active:
             return Response({"detail": "Invalid username or password."}, status=status.HTTP_401_UNAUTHORIZED)

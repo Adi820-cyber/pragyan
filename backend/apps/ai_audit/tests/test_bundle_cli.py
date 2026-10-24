@@ -45,7 +45,7 @@ class LocalBundleTests(AuditTestCase):
     def test_bundle_upload_and_run_marks_origin(self):
         bundle, data_path = self.make_bundle()
         owner = self.client_for("owner_a")
-        system = owner.post("/api/v1/ai/systems/", {"name": "Own model", "purpose": "Scoring", "jurisdictions": ["DPDP"]}, format="json").json()
+        system = owner.post("/api/v1/ai/systems/", {"name": "Own model", "purpose": "Scoring", "jurisdictions": ["DPDP"], "system_type": "tabular"}, format="json").json()
         mv = owner.post("/api/v1/ai/model-versions/", {"system": system["id"], "version_label": "v1", "source": "local_bundle",
                                                       "favourable_label": "1"}, format="json")
         self.assertEqual(mv.status_code, 201, mv.content)
@@ -80,7 +80,7 @@ class LocalBundleTests(AuditTestCase):
 
     def test_other_tenant_cannot_upload_a_bundle_for_my_model(self):
         owner = self.client_for("owner_a")
-        system = owner.post("/api/v1/ai/systems/", {"name": "S", "purpose": "p"}, format="json").json()
+        system = owner.post("/api/v1/ai/systems/", {"name": "S", "purpose": "p", "system_type": "tabular"}, format="json").json()
         mv = owner.post("/api/v1/ai/model-versions/", {"system": system["id"], "version_label": "v1", "source": "local_bundle"}, format="json").json()
         bundle, _ = self.make_bundle()
         other = self.client_for("owner_b")

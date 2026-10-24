@@ -19,6 +19,23 @@ const POLICY_FIELDS: { key: string; label: string; hint: string; step: string }[
   { key: "performance_drop", label: "Accuracy drop", hint: "Needs actual outcomes in both datasets.", step: "0.01" },
 ];
 
+const LLM_POLICY_FIELDS: { key: string; label: string; hint: string; step: string }[] = [
+  { key: "llm_refusal_gap", label: "Refusal-rate gap between groups", hint: "Review when one group is refused or deflected more often than another by more than this share.", step: "0.01" },
+  { key: "llm_length_ratio_min", label: "Answer-length ratio between groups", hint: "Review when the shortest group median is below this share of the longest.", step: "0.01" },
+  { key: "llm_score_gap_d", label: "Quality-score gap (standard deviations)", hint: "Needs a score column. Review above this gap.", step: "0.05" },
+  { key: "llm_min_grounded", label: "Minimum groundedness", hint: "Needs a source column. Average share of an answer's content found in its source.", step: "0.01" },
+  { key: "llm_unsupported_number_rate", label: "Maximum outputs with unsupported figures", hint: "Share of outputs that state a number found in neither the source nor the prompt.", step: "0.01" },
+  { key: "llm_min_citation_share", label: "Minimum citation coverage", hint: "Applies when the system must cite sources.", step: "0.01" },
+  { key: "llm_min_review_share", label: "Minimum share reviewed by a person", hint: "Needs a human-review column.", step: "0.01" },
+  { key: "drift_ks", label: "Numeric drift (KS statistic)", hint: "Review when answer or prompt length moves more than this.", step: "0.01" },
+  { key: "drift_js", label: "Vocabulary and category drift (Jensen-Shannon)", hint: "Review when what users ask or how the system answers moves more than this.", step: "0.01" },
+]
+
+const LLM_DEFAULTS: Record<string, number> = {
+  llm_refusal_gap: 0.05, llm_length_ratio_min: 0.8, llm_score_gap_d: 0.2, llm_min_grounded: 0.7,
+  llm_unsupported_number_rate: 0.05, llm_min_citation_share: 0.8, llm_min_review_share: 0.1, drift_ks: 0.1, drift_js: 0.1,
+}
+
 const DEFAULTS: Record<string, number> = {
   demographic_parity_difference: 0.1,
   selection_rate_ratio_min: 0.8,
@@ -53,21 +70,26 @@ export function NewAuditWizard({
   const [refId, setRefId] = useState("");
   const [curId, setCurId] = useState("");
   const version = sysVersions.find((v) => v.id === versionId) ?? sysVersions[0];
-  // Prefer datasets whose name says they hold predictions from the chosen model version.
-  const matchesVersion = (d: Dataset) => Boolean(version && d.name.includes(`(${version.version_label} predictions`));
+  // Prefer datasets whose name says they hold predictions or logs from the chosen model version.
+  const matchesVersion = (d: Dataset) => Boolean(version && d.name.includes(`(${version.version_label} `));
   const ref = sysRefs.find((d) => d.id === refId) ?? sysRefs.find(matchesVersion) ?? sysRefs[0];
   const defaultCur = sysCurs.find(matchesVersion) ?? sysCurs[0];
   const cur = curId === "none" ? undefined : (sysCurs.find((d) => d.id === curId) ?? defaultCur);
 
+  const system = systems.find((s) => s.id === systemId);
+  const isLlm = system?.system_type === "llm";
+  const [llmCols, setLlmCols] = useState<Record<string, string>>({});
+  const [requireCitations, setRequireCitations] = useState(false);
+  const setLlm = (key: string, value: string) => setLlmCols((c) => ({ ...c, [key]: value }));
   const [prediction, setPrediction] = useState("");
   const [label, setLabel] = useState("");
   const [groups, setGroups] = useState<string[]>([]);
   const [idCols, setIdCols] = useState<string[]>([]);
   const [favourable, setFavourable] = useState("");
-  const [thresholds, setThresholds] = useState<Record<string, number>>({ ...DEFAULTS });
+  const [thresholds, setThresholds] = useState<Record<string, number>>({ ...DEFAULTS, ...LLM_DEFAULTS });
   const [rationale, setRationale] = useState(DEFAULT_RATIONALE);
   const [minGroup, setMinGroup] = useState(30);
-  const [checks, setChecks] = useState<Category[]>(["bias", "drift", "explainability", "privacy"]);
+  const [checks, setChecks] = useState<Category[]>(["bias", "drift", "explainability", "grounding", "privacy", "governance"]);
 
   const [preview, setPreview] = useState<RunPreview | null>(null);
   const [problems, setProblems] = useState<string | null>(null);
@@ -75,39 +97,73 @@ export function NewAuditWizard({
 
   const columns = ref?.column_schema.map((c) => c.name) ?? [];
 
+  const activeChecks = checks.filter((c) => (isLlm ? c !== "explainability" : c !== "grounding"));
+
   function config(): RunConfig {
-    return {
-      prediction_column: prediction,
-      label_column: label || null,
+    const base = {
       group_columns: groups,
       id_columns: idCols,
-      favourable_label: favourable || version?.favourable_label || "1",
       min_group_size: minGroup,
       thresholds,
       thresholds_rationale: rationale,
-      checks,
+      checks: activeChecks,
+    };
+    if (isLlm) {
+      return {
+        ...base,
+        prompt_column: llmCols.prompt || null,
+        output_column: llmCols.output || null,
+        context_column: llmCols.context || null,
+        score_column: llmCols.score || null,
+        citations_column: llmCols.citations || null,
+        human_reviewed_column: llmCols.reviewed || null,
+        human_override_column: llmCols.override || null,
+        require_citations: requireCitations,
+      };
+    }
+    return {
+      ...base,
+      prediction_column: prediction,
+      label_column: label || null,
+      favourable_label: favourable || version?.favourable_label || "1",
     };
   }
-
   function body() {
     return {
       system: systemId,
       model_version: version?.id,
       reference_dataset: ref?.id,
       current_dataset: cur?.id ?? null,
-      config: config(),
+      config: { ...extraFromSample(), ...config() },
     };
   }
 
-  function applySample() {
-    const s = (ref?.suggested_config ?? {}) as Partial<RunConfig>;
-    setPrediction(String(s.prediction_column ?? ""));
-    setLabel(String(s.label_column ?? ""));
-    setGroups((s.group_columns as string[]) ?? []);
-    setIdCols((s.id_columns as string[]) ?? []);
-    setFavourable(String(s.favourable_label ?? ""));
+  // Sample configs can carry explicit feature and excluded columns, which the wizard does not edit.
+  function extraFromSample(): Partial<RunConfig> {
+    const all = ref?.suggested_config;
+    if (!ref?.is_sample || !all || isLlm) return {};
+    const s = (all.by_version?.[version?.version_label ?? ""] ?? all) as Partial<RunConfig>;
+    return { feature_columns: s.feature_columns, excluded_columns: (s as { excluded_columns?: string[] }).excluded_columns, seed: s.seed, bootstrap: s.bootstrap };
   }
 
+  function applySample() {
+    const all = ref?.suggested_config;
+    const s = (all?.by_version?.[version?.version_label ?? ""] ?? all ?? {}) as Partial<RunConfig>;
+    setGroups(s.group_columns ?? []);
+    setIdCols(s.id_columns ?? []);
+    setMinGroup(s.min_group_size ?? 30);
+    if (isLlm) {
+      setLlmCols({
+        prompt: s.prompt_column ?? "", output: s.output_column ?? "", context: s.context_column ?? "", score: s.score_column ?? "",
+        citations: s.citations_column ?? "", reviewed: s.human_reviewed_column ?? "", override: s.human_override_column ?? "",
+      });
+      setRequireCitations(Boolean(s.require_citations ?? system?.requires_citations));
+    } else {
+      setPrediction(String(s.prediction_column ?? ""));
+      setLabel(String(s.label_column ?? ""));
+      setFavourable(String(s.favourable_label ?? ""));
+    }
+  }
   const toggle = (list: string[], setList: (v: string[]) => void, value: string) =>
     setList(list.includes(value) ? list.filter((v) => v !== value) : [...list, value]);
 
@@ -180,7 +236,7 @@ export function NewAuditWizard({
               </select>
             </Field>
             {!ready && <p className="text-xs text-amber-200">You need at least one model version and one reference dataset. Add them on the system page.</p>}
-            <button type="button" disabled={!ready} onClick={() => { if (!favourable && version) setFavourable(version.favourable_label); setStep(1); }} className={buttonClass}>Continue</button>
+            <button type="button" disabled={!ready} onClick={() => { if (!favourable && version) setFavourable(version.favourable_label); if (ref?.suggested_config && (isLlm ? !llmCols.output : !prediction)) applySample(); setStep(1); }} className={buttonClass}>Continue</button>
           </>
         )}
 
@@ -188,10 +244,41 @@ export function NewAuditWizard({
           <>
             {ref.suggested_config && (
               <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
-                <p className="text-xs text-amber-100">This is the synthetic sample, so the column mapping can be filled in for you.</p>
-                <button type="button" onClick={applySample} className={ghostButtonClass}>Use sample mapping</button>
+                <p className="text-xs text-amber-100">
+                  {ref.is_real_data
+                    ? "This is a built-in public dataset example, so the recommended column mapping has been pre-filled for you."
+                    : "This is the built-in synthetic sample, so the recommended column mapping has been pre-filled for you."}
+                </p>
+                <button type="button" onClick={applySample} className={ghostButtonClass}>Reset sample mapping</button>
               </div>
             )}
+            {isLlm ? (
+              <div className="grid md:grid-cols-2 gap-4">
+                {([
+                  ["output", "Answer column", "What the system said. Required.", true],
+                  ["prompt", "Prompt column", "What the user asked.", false],
+                  ["context", "Source or context column", "The text the answer should rest on, such as retrieved documents. Needed to measure groundedness.", false],
+                  ["score", "Quality score column", "A numeric score from a reviewer or judge, if you have one.", false],
+                  ["citations", "Citations column", "Leave empty to detect citations such as [1] in the answer text.", false],
+                  ["reviewed", "Human-reviewed column", "1 if a person reviewed the answer.", false],
+                  ["override", "Human-changed column", "1 if the reviewer changed or rejected the answer.", false],
+                ] as const).map(([key, title, hint]) => (
+                  <Field key={key} label={title} htmlFor={`l_${key}`} hint={hint}>
+                    <select id={`l_${key}`} value={llmCols[key] ?? ""} onChange={(e) => setLlm(key, e.target.value)} className={inputClass}>
+                      <option value="">{key === "output" ? "Choose a column" : "None"}</option>
+                      {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </Field>
+                ))}
+                <Field label="Minimum group size" htmlFor="m_min" hint="Groups smaller than this are reported as insufficient evidence.">
+                  <input id="m_min" type="number" min={1} value={minGroup} onChange={(e) => setMinGroup(Number(e.target.value))} className={inputClass} />
+                </Field>
+                <label className="flex items-center gap-2 text-sm text-slate-200 md:col-span-2">
+                  <input type="checkbox" checked={requireCitations} onChange={(e) => setRequireCitations(e.target.checked)} className="accent-cyan-500" />
+                  Answers must cite their sources (alerts when citation coverage is low)
+                </label>
+              </div>
+            ) : (
             <div className="grid md:grid-cols-2 gap-4">
               <Field label="Prediction column" htmlFor="m_pred" hint="What the model decided.">
                 <select id="m_pred" value={prediction} onChange={(e) => setPrediction(e.target.value)} className={inputClass}>
@@ -212,11 +299,12 @@ export function NewAuditWizard({
                 <input id="m_min" type="number" min={1} value={minGroup} onChange={(e) => setMinGroup(Number(e.target.value))} className={inputClass} />
               </Field>
             </div>
+            )}
             <fieldset>
-              <legend className="text-xs font-medium text-slate-300">Group columns to compare (optional)</legend>
+              <legend className="text-xs font-medium text-slate-300">{isLlm ? "Group columns to compare, such as user language or region (optional)" : "Group columns to compare (optional)"}</legend>
               <p className="text-[11px] text-slate-500 mb-2">Choose these on purpose and only where you have a lawful reason to hold them. Reskure never infers sensitive attributes. With none selected, group checks are reported as not assessed.</p>
               <div className="flex flex-wrap gap-3">
-                {columns.filter((c) => c !== prediction && c !== label).map((c) => (
+                {columns.filter((c) => c !== prediction && c !== label && !Object.values(llmCols).includes(c)).map((c) => (
                   <label key={c} className="flex items-center gap-1.5 text-xs text-slate-200">
                     <input type="checkbox" checked={groups.includes(c)} onChange={() => toggle(groups, setGroups, c)} className="accent-cyan-500" /> {c}
                   </label>
@@ -232,12 +320,12 @@ export function NewAuditWizard({
                   </label>
                 ))}
               </div>
-              <p className="text-[11px] text-slate-500 mt-2">All remaining columns are treated as model inputs. Columns that hold personal data and are not needed are flagged in the next step.</p>
+              <p className="text-[11px] text-slate-500 mt-2">{isLlm ? "Personal data in prompts, answers and source text is scanned and reported with values masked." : "All remaining columns are treated as model inputs. Columns that hold personal data and are not needed are flagged in the next step."}</p>
             </fieldset>
             {problems && <p role="alert" className="text-xs text-rose-300 whitespace-pre-wrap">{problems}</p>}
             <div className="flex gap-3">
               <button type="button" onClick={() => setStep(0)} className={ghostButtonClass}>Back</button>
-              <button type="button" disabled={!prediction || busy} onClick={runPreview} className={buttonClass}>{busy ? "Checking..." : "Check the data"}</button>
+              <button type="button" disabled={(isLlm ? !llmCols.output : !prediction) || busy} onClick={runPreview} className={buttonClass}>{busy ? "Checking..." : "Check the data"}</button>
             </div>
           </>
         )}
@@ -291,7 +379,7 @@ export function NewAuditWizard({
           <>
             <p className="text-xs text-slate-400">These thresholds decide when a result is flagged for review. They are screening policy, not legal standards. They are saved with the run so the result can be defended and reproduced.</p>
             <div className="grid md:grid-cols-2 gap-4">
-              {POLICY_FIELDS.map((f) => (
+              {(isLlm ? LLM_POLICY_FIELDS : POLICY_FIELDS).map((f) => (
                 <Field key={f.key} label={f.label} htmlFor={`p_${f.key}`} hint={f.hint}>
                   <input id={`p_${f.key}`} type="number" step={f.step} min={0} max={1} value={thresholds[f.key]} onChange={(e) => setThresholds({ ...thresholds, [f.key]: Number(e.target.value) })} className={inputClass} />
                 </Field>
@@ -303,7 +391,7 @@ export function NewAuditWizard({
             <fieldset>
               <legend className="text-xs font-medium text-slate-300 mb-2">Checks to run</legend>
               <div className="flex flex-wrap gap-4">
-                {(Object.keys(CATEGORY_LABEL) as Category[]).map((k) => (
+                {(Object.keys(CATEGORY_LABEL) as Category[]).filter((k) => (isLlm ? k !== "explainability" : k !== "grounding")).map((k) => (
                   <label key={k} className="flex items-center gap-1.5 text-xs text-slate-200">
                     <input type="checkbox" checked={checks.includes(k)} onChange={() => setChecks(checks.includes(k) ? checks.filter((c) => c !== k) : [...checks, k])} className="accent-cyan-500" /> {CATEGORY_LABEL[k]}
                   </label>
@@ -312,7 +400,7 @@ export function NewAuditWizard({
             </fieldset>
             <div className="flex gap-3">
               <button type="button" onClick={() => setStep(2)} className={ghostButtonClass}>Back</button>
-              <button type="button" disabled={checks.length === 0 || !rationale.trim()} onClick={() => setStep(4)} className={buttonClass}>Continue</button>
+              <button type="button" disabled={activeChecks.length === 0 || !rationale.trim()} onClick={() => setStep(4)} className={buttonClass}>Continue</button>
             </div>
           </>
         )}
@@ -321,11 +409,11 @@ export function NewAuditWizard({
           <>
             <h2 className="text-sm font-bold text-white">Ready to run</h2>
             <dl className="grid md:grid-cols-2 gap-3 text-sm">
-              <div><dt className="text-xs text-slate-400">System / model</dt><dd className="text-slate-100">{systems.find((s) => s.id === systemId)?.name} / {version?.version_label}</dd></div>
+              <div><dt className="text-xs text-slate-400">System / model</dt><dd className="text-slate-100">{system?.name} / {version?.version_label}</dd></div>
               <div><dt className="text-xs text-slate-400">Reference</dt><dd className="text-slate-100">{ref?.name}</dd></div>
               <div><dt className="text-xs text-slate-400">Current</dt><dd className="text-slate-100">{cur?.name ?? "None (drift not assessed)"}</dd></div>
               <div><dt className="text-xs text-slate-400">Groups compared</dt><dd className="text-slate-100">{groups.join(", ") || "None"}</dd></div>
-              <div><dt className="text-xs text-slate-400">Checks</dt><dd className="text-slate-100">{checks.map((c) => CATEGORY_LABEL[c]).join(", ")}</dd></div>
+              <div><dt className="text-xs text-slate-400">Checks</dt><dd className="text-slate-100">{activeChecks.map((c) => CATEGORY_LABEL[c]).join(", ")}</dd></div>
             </dl>
             <p className="text-xs text-slate-400">The audit runs in the background. You can leave this page; progress is shown on the audit page.</p>
             {problems && <p role="alert" className="text-xs text-rose-300 whitespace-pre-wrap">{problems}</p>}

@@ -15,6 +15,18 @@ DEFAULT_THRESHOLDS = {
     "performance_drop": 0.05,
     "proxy_eta": 0.30,
     "pii_value_match_share": 0.50,
+    # LLM systems
+    "llm_refusal_gap": 0.05,
+    "llm_score_gap_d": 0.20,
+    "llm_length_ratio_min": 0.80,
+    "llm_min_grounded": 0.70,
+    "llm_unsupported_number_rate": 0.05,
+    "llm_min_citation_share": 0.80,
+    "llm_min_review_share": 0.10,
+    "llm_rubber_stamp_override": 0.01,
+    "llm_high_override": 0.30,
+    # Data rights
+    "rights_min_on_time": 0.90,
 }
 DEFAULT_MIN_GROUP_SIZE = 30
 DEFAULT_BOOTSTRAP = 300
@@ -59,9 +71,14 @@ def merged_thresholds(config: dict) -> dict:
     out = dict(DEFAULT_THRESHOLDS)
     for key, value in (config.get("thresholds") or {}).items():
         if key in out:
-            out[key] = float(value)
+            number = float(value)
+            if number != number or number in (float("inf"), float("-inf")):  # NaN / infinity would disable alerts
+                raise ValueError(f"Threshold '{key}' must be a finite number.")
+            out[key] = number
     return out
 
 
 def fmt_pct(x: float) -> str:
+    if 0 < x < 0.001:
+        return "<0.1%"
     return f"{x * 100:.1f}%"
