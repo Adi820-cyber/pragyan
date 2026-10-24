@@ -133,6 +133,7 @@ urlpatterns = [
     path("api/v1/ciso/risks/", ciso.CisoRisksView.as_view(), name="ciso-risks"),
     path("api/v1/ciso/gaps/", ciso.CisoGapAnalysisView.as_view(), name="ciso-gaps"),
     path("api/v1/ciso/seed/", ciso.CisoResetCatalogView.as_view(), name="ciso-seed"),
+    path("api/v1/cloud-security/", include("apps.cloud_security.urls")),
     path("api/v1/", include(router.urls)),
 
     # OpenAPI Schema & Interactive Documentation
