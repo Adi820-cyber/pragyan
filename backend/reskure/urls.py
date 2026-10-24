@@ -93,6 +93,8 @@ router.register(r"ai/systems", ai.AISystemViewSet, basename="ai-system")
 router.register(r"ai/model-versions", ai.ModelVersionViewSet, basename="ai-model-version")
 router.register(r"ai/datasets", ai.DatasetViewSet, basename="ai-dataset")
 router.register(r"ai/runs", ai.AuditRunViewSet, basename="ai-run")
+router.register(r"ai/dependencies", ai.DependencyViewSet, basename="ai-dependency")
+router.register(r"ai/rights-processes", ai.RightsProcessViewSet, basename="ai-rights-process")
 router.register(r"ai/findings", ai.FindingViewSet, basename="ai-finding")
 router.register(r"ai/control-assessments", ai.ControlAssessmentViewSet, basename="ai-control-assessment")
 router.register(r"ai/control-evidence", ai.ControlEvidenceViewSet, basename="ai-control-evidence")
@@ -131,6 +133,7 @@ urlpatterns = [
     path("api/v1/ciso/risks/", ciso.CisoRisksView.as_view(), name="ciso-risks"),
     path("api/v1/ciso/gaps/", ciso.CisoGapAnalysisView.as_view(), name="ciso-gaps"),
     path("api/v1/ciso/seed/", ciso.CisoResetCatalogView.as_view(), name="ciso-seed"),
+    path("api/v1/cloud-security/", include("apps.cloud_security.urls")),
     path("api/v1/", include(router.urls)),
 
     # OpenAPI Schema & Interactive Documentation

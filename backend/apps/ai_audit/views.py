@@ -4,6 +4,7 @@ from datetime import date
 
 from django.conf import settings
 from django.db import transaction
+from django.core.files.base import ContentFile
 from django.http import FileResponse, Http404, HttpResponse
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
@@ -19,8 +20,11 @@ from apps.ai_audit.services import explain, privacy, report as report_service
 from apps.ai_audit.services.validation import (
     AuditInputError,
     available_checks,
+    available_llm_checks,
     load_csv,
+    load_table,
     schema_of,
+    validate_llm_config,
     validate_run_config,
 )
 from apps.ai_audit.storage import sha256_of_uploaded
@@ -116,17 +120,22 @@ class DatasetViewSet(
         upload = data["file"]
         if upload.size > settings.MAX_UPLOAD_BYTES:
             raise ValidationError({"file": f"File is larger than the {settings.MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit."})
-        if not upload.name.lower().endswith(".csv"):
-            raise ValidationError({"file": "Only .csv files are accepted."})
+        if not upload.name.lower().endswith((".csv", ".jsonl", ".ndjson")):
+            raise ValidationError({"file": "Only .csv, .jsonl or .ndjson files are accepted."})
         raw = upload.read()
         try:
-            df = load_csv(raw, max_rows=settings.MAX_DATASET_ROWS, max_bytes=settings.MAX_UPLOAD_BYTES)
+            df = load_table(raw, upload.name, max_rows=settings.MAX_DATASET_ROWS, max_bytes=settings.MAX_UPLOAD_BYTES)
         except AuditInputError as exc:
             raise ValidationError({"file": exc.problems})
-        upload.seek(0)
+        if not upload.name.lower().endswith(".csv"):
+            # Stored as CSV so every later read is uniform; the hash is of the stored file.
+            raw = df.to_csv(index=False).encode("utf-8")
+            upload = ContentFile(raw, name="upload.csv")
+        else:
+            upload.seek(0)
         dataset = m.Dataset(
             tenant_id=membership.tenant_id, system=system, role=data["role"], name=data["name"],
-            original_filename=upload.name[:255], sha256=hashlib.sha256(raw).hexdigest(), row_count=len(df),
+            original_filename=data["file"].name[:255], sha256=hashlib.sha256(raw).hexdigest(), row_count=len(df),
             column_schema=schema_of(df), pii_scan={"findings": privacy.scan_dataframe(df)},
             period_start=data.get("period_start"), period_end=data.get("period_end"),
             delete_after=data.get("delete_after"), uploaded_by=membership,
@@ -190,9 +199,10 @@ class AuditRunViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.RetrieveModel
             raise ValidationError({"detail": errors})
 
         cfg = dict(d["config"])
-        cfg.setdefault("favourable_label", mv.favourable_label)
-        if not cfg.get("feature_columns") and mv.feature_columns:
-            cfg["feature_columns"] = list(mv.feature_columns)
+        if system.system_type == "tabular":
+            cfg.setdefault("favourable_label", mv.favourable_label)
+            if not cfg.get("feature_columns") and mv.feature_columns:
+                cfg["feature_columns"] = list(mv.feature_columns)
 
         frames = {}
         for key, ds in (("ref", ref), ("cur", cur)):
@@ -205,7 +215,10 @@ class AuditRunViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.RetrieveModel
             except AuditInputError as exc:
                 raise ValidationError({"detail": exc.problems})
         try:
-            cfg = validate_run_config(cfg, frames["ref"], frames["cur"])
+            if system.system_type == "llm":
+                cfg = validate_llm_config(cfg, frames["ref"], frames["cur"])
+            else:
+                cfg = validate_run_config(cfg, frames["ref"], frames["cur"])
         except AuditInputError as exc:
             raise ValidationError({"config": exc.problems})
         return system, mv, ref, cur, cfg, frames
@@ -213,7 +226,7 @@ class AuditRunViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.RetrieveModel
     @action(detail=False, methods=["POST"])
     def preview(self, request):
         """Validate a run request and report which checks can run, without creating a run."""
-        _, mv, ref, cur, cfg, frames = self._inputs(request)
+        system, mv, ref, cur, cfg, frames = self._inputs(request)
         has_bundle = m.ExplanationBundle.all_objects.filter(model_version=mv).exists()
         quality = {}
         for key, frame in (("reference", frames["ref"]), ("current", frames["cur"])):
@@ -224,7 +237,9 @@ class AuditRunViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.RetrieveModel
                 }
         return Response({
             "config": cfg,
-            "available_checks": available_checks(cfg, cur is not None, mv.source, has_bundle),
+            "available_checks": (available_llm_checks(cfg, cur is not None) if system.system_type == "llm"
+                                 else available_checks(cfg, cur is not None, mv.source, has_bundle)),
+            "system_type": system.system_type,
             "data_quality": quality,
             "pii_candidates": (ref.pii_scan or {}).get("findings", []),
         })
@@ -391,6 +406,27 @@ class FindingViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.RetrieveModelM
         return Response(ser.data)
 
 
+# ------------------------------------------------------------------ vendors and rights
+class DependencyViewSet(AIBaseViewSet, viewsets.ModelViewSet):
+    queryset = m.Dependency.objects.all()
+    serializer_class = s.DependencySerializer
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        system = self.request.query_params.get("system")
+        return qs.filter(system_id=system) if system else qs
+
+
+class RightsProcessViewSet(AIBaseViewSet, viewsets.ModelViewSet):
+    queryset = m.RightsProcess.objects.select_related("owner").all()
+    serializer_class = s.RightsProcessSerializer
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        system = self.request.query_params.get("system")
+        return qs.filter(system_id=system) if system else qs
+
+
 # ------------------------------------------------------------------ controls
 class ControlPackView(APIView):
     def get(self, request):
@@ -418,13 +454,19 @@ class ControlAssessmentViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.Retr
         a = self.get_object()
         ser = self.get_serializer(a, data=allowed, partial=True)
         ser.is_valid(raise_exception=True)
+        was_reviewed = a.state in ("reviewed", "gap_identified")
         a = ser.save(updated_by=_membership(request))
         if "applicable" in allowed:
             if not a.applicable:
                 a.state = "not_applicable"
             elif a.state == "not_applicable":
                 a.state = "evidence_supplied" if a.evidence_files.exists() else "needs_evidence"
-            a.save(update_fields=["state", "updated_at"])
+        # Any edit to a reviewed control voids the earlier sign-off: the reviewer approved a different record.
+        if was_reviewed and a.state in ("reviewed", "gap_identified"):
+            a.state = "evidence_supplied" if a.evidence_files.exists() else "needs_evidence"
+        if was_reviewed:
+            a.reviewer, a.reviewed_at, a.review_comment = None, None, ""
+        a.save(update_fields=["state", "reviewer", "reviewed_at", "review_comment", "updated_at"])
         return Response(self.get_serializer(a).data)
 
     @action(detail=False, methods=["POST"])
@@ -546,12 +588,13 @@ class OverviewView(APIView):
                 "control_gaps": sum(c["control_gaps"] for c in cards),
                 "active_runs": m.AuditRun.all_objects.filter(tenant_id=tid, status__in=["queued", "running"]).count(),
             },
-            "sample_mode": m.Dataset.all_objects.filter(tenant_id=tid, is_sample=True).exists(),
+            "sample_mode": m.Dataset.all_objects.filter(tenant_id=tid, is_sample=True, is_real_data=False).exists(),
+            "real_data_mode": m.Dataset.all_objects.filter(tenant_id=tid, is_sample=True, is_real_data=True).exists(),
         })
 
 
 class DemoSeedView(APIView):
-    """Loads the clearly labelled synthetic HireLens scenario. Disabled unless explicitly allowed."""
+    """Loads a clearly labelled sample scenario. Disabled unless explicitly allowed."""
 
     permission_classes = [HasReskurePermission]
     resource_name = "tenant"
@@ -559,7 +602,20 @@ class DemoSeedView(APIView):
     def post(self, request):
         if not settings.ALLOW_DEMO_SEED:
             raise PermissionDenied("Demo data loading is disabled on this deployment.")
-        from apps.ai_audit.services.demo import seed_hirelens
+        from apps.ai_audit.sample.compas import RealDataUnavailable
+        from apps.ai_audit.services import demo
 
-        system = seed_hirelens(_membership(request).tenant, _membership(request))
+        membership = _membership(request)
+        scenario = (request.data.get("scenario") or "finsum")
+        try:
+            if scenario == "finsum":
+                system = demo.seed_finsum(membership.tenant, membership)
+            elif scenario == "compas":
+                system = demo.seed_compas(membership.tenant, membership)
+            elif scenario == "hirelens":
+                system = demo.seed_hirelens(membership.tenant, membership)
+            else:
+                raise ValidationError({"scenario": "Choose finsum, compas or hirelens."})
+        except RealDataUnavailable as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         return Response({"system": str(system.id), "name": system.name}, status=status.HTTP_201_CREATED)

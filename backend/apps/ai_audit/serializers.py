@@ -1,30 +1,15 @@
 from rest_framework import serializers
 
 from apps.ai_audit import models as m
-from apps.ai_audit.sample.generate import SAMPLE_MODELS
+from apps.ai_audit.sample.registry import features_for, known_keys
 from apps.core.models import Membership
+from apps.core.serializers import TenantBoundSerializer
 
 JURISDICTIONS = {"DPDP", "GDPR"}
 
 
 def _name(member):
     return (member.full_name or member.email) if member else None
-
-
-class TenantBoundSerializer(serializers.ModelSerializer):
-    """Rejects related objects that belong to a different tenant than the caller."""
-
-    def _tenant_id(self):
-        request = self.context.get("request")
-        membership = getattr(request, "membership", None)
-        return membership.tenant_id if membership else None
-
-    def validate(self, attrs):
-        tenant_id = self._tenant_id()
-        for key, value in attrs.items():
-            if hasattr(value, "tenant_id") and str(value.tenant_id) != str(tenant_id):
-                raise serializers.ValidationError({key: "Not found."})
-        return attrs
 
 
 class AISystemSerializer(TenantBoundSerializer):
@@ -38,7 +23,7 @@ class AISystemSerializer(TenantBoundSerializer):
         fields = [
             "id", "name", "purpose", "decision_affected", "intended_population", "owner", "owner_name", "reviewer",
             "reviewer_name", "jurisdictions", "automated_decision", "processes_children_data",
-            "is_significant_data_fiduciary", "status", "latest_run", "open_findings", "created_at",
+            "is_significant_data_fiduciary", "system_type", "requires_citations", "status", "latest_run", "open_findings", "created_at",
         ]
         read_only_fields = ["id", "created_at"]
 
@@ -65,6 +50,8 @@ class AISystemSerializer(TenantBoundSerializer):
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
+        if self.instance is not None and attrs.get("system_type", self.instance.system_type) != self.instance.system_type:
+            raise serializers.ValidationError({"system_type": "The system type cannot be changed once the system exists. Register a new system instead."})
         reviewer, owner = attrs.get("reviewer"), attrs.get("owner")
         if reviewer and owner and reviewer.id == owner.id:
             raise serializers.ValidationError({"reviewer": "The reviewer must be a different person from the owner."})
@@ -77,8 +64,8 @@ class ModelVersionSerializer(TenantBoundSerializer):
     class Meta:
         model = m.ModelVersion
         fields = [
-            "id", "system", "system_name", "version_label", "source", "sample_key", "model_type", "feature_columns",
-            "favourable_label", "threshold", "notes", "created_at",
+            "id", "system", "system_name", "version_label", "source", "sample_key", "model_type", "provider", "model_name",
+            "prompt_version", "feature_columns", "favourable_label", "threshold", "notes", "created_at",
         ]
         read_only_fields = ["id", "created_at"]
 
@@ -86,12 +73,18 @@ class ModelVersionSerializer(TenantBoundSerializer):
         attrs = super().validate(attrs)
         source = attrs.get("source", getattr(self.instance, "source", "predictions_only"))
         key = attrs.get("sample_key", getattr(self.instance, "sample_key", ""))
+        system = attrs.get("system") or getattr(self.instance, "system", None)
+        is_llm_source = source in ("llm_hosted", "llm_self_hosted")
+        if system is not None and system.system_type == "llm" and source not in ("llm_hosted", "llm_self_hosted"):
+            raise serializers.ValidationError({"source": "An LLM system uses a hosted or self-hosted LLM model version."})
+        if system is not None and system.system_type == "tabular" and is_llm_source:
+            raise serializers.ValidationError({"source": "A tabular system cannot use an LLM model version."})
         if source == "server_sample":
-            if key not in SAMPLE_MODELS:
-                raise serializers.ValidationError({"sample_key": f"Choose one of: {sorted(SAMPLE_MODELS)}."})
+            if key not in known_keys():
+                raise serializers.ValidationError({"sample_key": f"Choose one of: {known_keys()}."})
             attrs.setdefault("model_type", "GradientBoostingClassifier")
             if not attrs.get("feature_columns"):
-                attrs["feature_columns"] = list(SAMPLE_MODELS[key])
+                attrs["feature_columns"] = features_for(key)
         elif key:
             raise serializers.ValidationError({"sample_key": "Only built-in sample models use a sample key."})
         return attrs
@@ -104,17 +97,13 @@ class DatasetSerializer(serializers.ModelSerializer):
         model = m.Dataset
         fields = [
             "id", "system", "role", "name", "original_filename", "sha256", "row_count", "column_schema", "pii_scan",
-            "period_start", "period_end", "is_sample", "delete_after", "created_at", "suggested_config",
+            "period_start", "period_end", "is_sample", "is_real_data", "source_note", "delete_after", "created_at", "suggested_config",
         ]
         read_only_fields = fields
 
     def get_suggested_config(self, obj):
         # Only the synthetic sample gets a pre-filled mapping; real data columns are chosen by the user.
-        if not obj.is_sample:
-            return None
-        from apps.ai_audit.services.demo import DEMO_CONFIG
-
-        return DEMO_CONFIG
+        return obj.sample_config if obj.is_sample else None
 
 
 class DatasetUploadSerializer(serializers.Serializer):
@@ -252,4 +241,44 @@ class ControlAssessmentSerializer(TenantBoundSerializer):
         attrs = super().validate(attrs)
         if attrs.get("applicable") is False and not (attrs.get("applicability_rationale") or getattr(self.instance, "applicability_rationale", "")):
             raise serializers.ValidationError({"applicability_rationale": "Say why this control does not apply."})
+        return attrs
+
+
+class DependencySerializer(TenantBoundSerializer):
+    class Meta:
+        model = m.Dependency
+        fields = [
+            "id", "system", "name", "service", "role", "personal_data_shared", "data_categories", "region", "outside_india",
+            "outside_eea", "transfer_mechanism", "contract_in_place", "contract_reviewed_on", "trains_on_customer_data",
+            "retention_days", "subprocessors_listed", "exit_plan", "criticality", "last_reviewed", "notes", "created_at",
+        ]
+        read_only_fields = ["id", "created_at"]
+
+    def validate_data_categories(self, value):
+        if not isinstance(value, list) or not all(isinstance(v, str) and len(v) <= 100 for v in value):
+            raise serializers.ValidationError("Use a list of short text labels.")
+        return value
+
+
+class RightsProcessSerializer(TenantBoundSerializer):
+    owner_name = serializers.SerializerMethodField()
+    right_label = serializers.CharField(source="get_right_display", read_only=True)
+
+    class Meta:
+        model = m.RightsProcess
+        fields = [
+            "id", "system", "right", "right_label", "procedure_exists", "owner", "owner_name", "channel", "sla_days", "last_tested",
+            "requests_12m", "closed_on_time_12m", "evidence_note", "created_at",
+        ]
+        read_only_fields = ["id", "created_at"]
+
+    def get_owner_name(self, obj):
+        return _name(obj.owner)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        requests = attrs.get("requests_12m", getattr(self.instance, "requests_12m", 0))
+        on_time = attrs.get("closed_on_time_12m", getattr(self.instance, "closed_on_time_12m", 0))
+        if on_time > requests:
+            raise serializers.ValidationError({"closed_on_time_12m": "Cannot be more than the number of requests received."})
         return attrs

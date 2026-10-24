@@ -1,42 +1,44 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Network,
-  ArrowRight,
-  ShieldAlert,
-  ShieldCheck,
-  Zap,
-  Layers,
-  Lock,
-  Unlock,
-  Activity,
-  Server,
-  Cpu,
-  Database,
-  RefreshCw,
-  Play,
-  RotateCcw,
-  CheckCircle2,
-  XCircle,
-  AlertTriangle,
-  Info,
-  Radio,
-  Share2,
+  Activity, AlertTriangle, CheckCircle2, Cpu, Database, Info, Layers, Lock, Network, Play, Radio, Server, Share2, ShieldAlert,
+  ShieldCheck, Unlock, XCircle, Zap,
 } from "lucide-react";
+import { call, errText } from "@/lib/client/api";
+import { buttonClass, Field, ghostButtonClass, inputClass } from "@/components/ui/Panel";
 
-// NetBox-inspired Data Types
-export interface InterfaceOption {
+export interface NetInterface {
   id: string;
+  device: string;
+  device_name: string;
+  device_role: string;
   name: string;
-  interface_type: string;
   ip_address: string | null;
   mtu: number;
   is_pass_through: boolean;
-  device_name: string;
-  device_role: string;
 }
-
+export interface NetDevice {
+  id: string;
+  name: string;
+  role: string;
+  status: string;
+  interfaces: NetInterface[];
+}
+export interface NetCable {
+  id: string;
+  label: string;
+  status: string;
+  termination_a_name: string;
+  termination_b_name: string;
+  is_encrypted: boolean;
+}
+interface Topology {
+  tenant_name: string;
+  devices: NetDevice[];
+  cables: NetCable[];
+  rules: { id: string }[];
+}
 export interface HopTelemetry {
   hop_number: number;
   device_name: string;
@@ -54,22 +56,11 @@ export interface HopTelemetry {
   action: string;
   notes: string;
 }
-
 export interface TraceResult {
-  status: "DELIVERED" | "BLOCKED_FIREWALL" | "SEVERED_CABLE" | "DROPPED" | "MTU_ERROR" | "ROUTING_LOOP" | "HOP_LIMIT_EXCEEDED" | "DISCONNECTED";
+  status: string;
   termination_reason: string;
-  source: {
-    device: string;
-    role: string;
-    interface: string;
-    ip: string | null;
-  };
-  destination: {
-    device: string;
-    role: string;
-    interface: string;
-    ip: string | null;
-  };
+  source: { device: string; role: string; interface: string; ip: string | null };
+  destination: { device: string; role: string; interface: string; ip: string | null };
   protocol: string;
   destination_port: string;
   packet_size_bytes: number;
@@ -82,1025 +73,419 @@ export interface TraceResult {
   hops: HopTelemetry[];
 }
 
-// Preset demonstration scenarios inspired by NetBox DCIM and AI audit pipelines
-const PRESET_SCENARIOS = [
-  {
-    id: "ai-inference",
-    title: "⚡ End-to-End AI Inference Path",
-    description: "Ingress packet through Edge Router, WAF inspection, Patch Panel cross-connect to DGX H100 inference worker.",
-    protocol: "HTTPS",
-    port: "443",
-    packetSize: 1420,
-    payload: "Customer Job Application & Screening Feature Vector (Restricted PII)",
-    sourceName: "edge-rt01.reskure.net",
-    destName: "dgx-infer-01.reskure.net",
-  },
-  {
-    id: "db-vector-sync",
-    title: "🛡️ High-Bandwidth DB Vector Sync",
-    description: "Model worker storing 1536-dim embeddings to Vector DB storage node over 100G Jumbo Frame fabric.",
-    protocol: "TCP",
-    port: "5432",
-    packetSize: 8900,
-    payload: "High-Density SHAP Embeddings & Bias Audit Reference Set",
-    sourceName: "dgx-infer-01.reskure.net",
-    destName: "vectordb-cl01.reskure.net",
-  },
-  {
-    id: "firewall-drop",
-    title: "🚫 Perimeter Firewall Drop (Zero-Trust)",
-    description: "Simulate unauthorized packet probing legacy ports (Telnet/RDP). Evaluates WAF/Firewall drop posture.",
-    protocol: "TCP",
-    port: "23",
-    packetSize: 64,
-    payload: "Telnet Legacy Probe (Unauthorized)",
-    sourceName: "edge-rt01.reskure.net",
-    destName: "dgx-infer-01.reskure.net",
-  },
-  {
-    id: "severed-cable",
-    title: "💥 Severed Structured Cable Simulation",
-    description: "Simulate physical fiber break on Inter-Rack MPO Trunk between Core Switch and Patch Panel.",
-    protocol: "HTTPS",
-    port: "443",
-    packetSize: 1420,
-    payload: "Client Request on Severed Link",
-    sourceName: "edge-rt01.reskure.net",
-    destName: "tor-sw03.reskure.net",
-    isSeveredSim: true,
-  },
+/** Presets look their ports up by name in the stored network; a preset is only offered if its ports exist. */
+const PRESETS = [
+  { id: "ai-inference", title: "End-to-end AI inference path", description: "Ingress through the edge router, firewall, patch-panel cross-connect and top-of-rack switch to the inference host.",
+    protocol: "HTTPS", port: 443, size: 1420, payload: "Applicant screening feature vector (personal data)", src: ["edge-rt", "Hundred"], dst: ["dgx-infer", "net0"], cut: [] as string[] },
+  { id: "db-vector-sync", title: "High-bandwidth vector store sync", description: "Inference host writing embeddings to the vector database with jumbo frames.",
+    protocol: "TCP", port: 5432, size: 8900, payload: "Embeddings and audit reference set", src: ["dgx-infer", "ib0"], dst: ["vectordb", "bond0"], cut: [] as string[] },
+  { id: "firewall-drop", title: "Perimeter firewall drop", description: "Legacy Telnet probe against the inference host. Tests whether the firewall rule really matches.",
+    protocol: "TCP", port: 23, size: 64, payload: "Telnet probe (unauthorised)", src: ["edge-rt", "Hundred"], dst: ["dgx-infer", "net0"], cut: [] as string[] },
+  { id: "severed-cable", title: "What if the backbone trunk is cut?", description: "Assumes the core-to-patch-panel trunk is cut for this trace only. Nothing is changed in your records.",
+    protocol: "HTTPS", port: 443, size: 1420, payload: "Client request", src: ["edge-rt", "Hundred"], dst: ["tor-sw", "Port-Channel"], cut: ["TRK-MPO-003"] },
 ];
 
-// Fallback NetBox demo data if backend is offline or empty
-const DEFAULT_TOPOLOGY_HOPS: HopTelemetry[] = [
-  {
-    hop_number: 1,
-    device_name: "edge-rt01.reskure.net",
-    device_role: "EDGE_ROUTER",
-    interface_name: "HundredGigE0/0/0/0",
-    ip_address: "198.51.100.1",
-    cable_label: "CBL-WAN-001",
-    cable_type: "Single-Mode Fiber (OS2)",
-    bandwidth_gbps: 10,
-    hop_latency_ms: 0.18,
-    cumulative_latency_ms: 0.18,
-    is_encrypted: true,
-    mtu: 9000,
-    action: "PERMIT",
-    notes: "Ingress border router accepted frame. BGP route validated.",
-  },
-  {
-    hop_number: 2,
-    device_name: "sec-fw01.reskure.net",
-    device_role: "FIREWALL_WAF",
-    interface_name: "ethernet1/1 (WAN)",
-    ip_address: "10.100.0.1",
-    cable_label: "CBL-SEC-002",
-    cable_type: "Single-Mode Fiber (OS2)",
-    bandwidth_gbps: 10,
-    hop_latency_ms: 0.22,
-    cumulative_latency_ms: 0.40,
-    is_encrypted: true,
-    mtu: 1500,
-    action: "INSPECTED",
-    notes: "WAF Deep Packet Inspection passed: TLS 1.3 verified, no OWASP anomalies detected.",
-  },
-  {
-    hop_number: 3,
-    device_name: "core-sw01.reskure.net",
-    device_role: "CORE_SWITCH",
-    interface_name: "Ethernet1/1",
-    ip_address: "10.100.10.1",
-    cable_label: "TRK-MPO-003",
-    cable_type: "Multi-Mode Fiber (OM4 MPO-12)",
-    bandwidth_gbps: 25,
-    hop_latency_ms: 0.35,
-    cumulative_latency_ms: 0.75,
-    is_encrypted: true,
-    mtu: 9000,
-    action: "PERMIT",
-    notes: "Traversed backbone trunk link to distribution cross-connect.",
-  },
-  {
-    hop_number: 4,
-    device_name: "patch-pp01.reskure.net",
-    device_role: "PATCH_PANEL",
-    interface_name: "Rear Port 01 ➔ Front Port 01",
-    ip_address: "Passive Pass-Through",
-    cable_label: "Internal Patch Cross-Connect",
-    cable_type: "Passive Optical Pass-Through",
-    bandwidth_gbps: 25,
-    hop_latency_ms: 0.02,
-    cumulative_latency_ms: 0.77,
-    is_encrypted: true,
-    mtu: 9000,
-    action: "PASS_THROUGH",
-    notes: "NetBox structured cross-connect resolved: Rear MPO pin internally mapped to Front LC Port 01.",
-  },
-  {
-    hop_number: 5,
-    device_name: "tor-sw03.reskure.net",
-    device_role: "TOR_SWITCH",
-    interface_name: "Port-Channel 1",
-    ip_address: "10.100.20.1",
-    cable_label: "CBL-CROSS-004",
-    cable_type: "Multi-Mode Fiber (OM4)",
-    bandwidth_gbps: 25,
-    hop_latency_ms: 0.08,
-    cumulative_latency_ms: 0.85,
-    is_encrypted: true,
-    mtu: 9000,
-    action: "PERMIT",
-    notes: "Leaf switch forwarded frame to AI server rack aggregation layer.",
-  },
-  {
-    hop_number: 6,
-    device_name: "ai-ingress-gw01.reskure.net",
-    device_role: "LOAD_BALANCER",
-    interface_name: "eth0 (Ingress VIP)",
-    ip_address: "10.100.30.50",
-    cable_label: "CBL-GW-005",
-    cable_type: "Cat6A Shielded Twisted Pair",
-    bandwidth_gbps: 10,
-    hop_latency_ms: 0.12,
-    cumulative_latency_ms: 0.97,
-    is_encrypted: true,
-    mtu: 1500,
-    action: "PERMIT",
-    notes: "Service mesh proxy routed request to healthy DGX inference replica.",
-  },
-  {
-    hop_number: 7,
-    device_name: "dgx-infer-01.reskure.net",
-    device_role: "COMPUTE_HOST",
-    interface_name: "net0 (Inference Cluster API)",
-    ip_address: "10.100.40.10",
-    cable_label: "Destination Termination",
-    cable_type: "Direct-Attach Copper (DAC Twinax)",
-    bandwidth_gbps: 100,
-    hop_latency_ms: 0.05,
-    cumulative_latency_ms: 1.02,
-    is_encrypted: true,
-    mtu: 9000,
-    action: "DELIVERED",
-    notes: "Destination socket reached. NVIDIA Triton server received tensor inference payload.",
-  },
-];
+const PROTOCOLS = ["HTTPS", "TCP", "UDP", "GRPC", "ICMP"];
+
+function iconFor(role: string) {
+  switch (role) {
+    case "EDGE_ROUTER": return Radio;
+    case "FIREWALL_WAF": return ShieldCheck;
+    case "CORE_SWITCH":
+    case "TOR_SWITCH": return Network;
+    case "PATCH_PANEL": return Layers;
+    case "LOAD_BALANCER": return Share2;
+    case "COMPUTE_HOST": return Cpu;
+    case "DATABASE_HOST": return Database;
+    default: return Server;
+  }
+}
+
+const STATUS_BADGE: Record<string, { label: string; tone: string; icon: typeof Activity }> = {
+  DELIVERED: { label: "Delivered", tone: "bg-emerald-500/15 border-emerald-500/40 text-emerald-300", icon: CheckCircle2 },
+  BLOCKED_FIREWALL: { label: "Blocked by firewall", tone: "bg-amber-500/15 border-amber-500/40 text-amber-300", icon: ShieldAlert },
+  SEVERED_CABLE: { label: "Cable cut: no signal", tone: "bg-rose-500/15 border-rose-500/40 text-rose-300", icon: XCircle },
+  DROPPED: { label: "Dropped: device offline", tone: "bg-rose-500/15 border-rose-500/40 text-rose-300", icon: XCircle },
+  DISCONNECTED: { label: "No path between these ports", tone: "bg-slate-500/15 border-slate-500/40 text-slate-300", icon: AlertTriangle },
+  HOP_LIMIT_EXCEEDED: { label: "Hop limit exceeded", tone: "bg-slate-500/15 border-slate-500/40 text-slate-300", icon: AlertTriangle },
+};
 
 export function PacketTracerView() {
-  const [selectedScenario, setSelectedScenario] = useState<string>("ai-inference");
-  const [protocol, setProtocol] = useState<string>("HTTPS");
-  const [port, setPort] = useState<string>("443");
-  const [packetSize, setPacketSize] = useState<number>(1420);
-  const [payloadLabel, setPayloadLabel] = useState<string>("Customer Job Application & Screening Feature Vector");
-  const [activeHopIndex, setActiveHopIndex] = useState<number | null>(null);
-  const [isTracing, setIsTracing] = useState<boolean>(false);
-  const [continuousSim, setContinuousSim] = useState<boolean>(false);
-  const [packetsSent, setPacketsSent] = useState<number>(1);
-  const [activeTab, setActiveTab] = useState<"visual" | "telemetry" | "netbox-schema">("visual");
+  const [topology, setTopology] = useState<Topology | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // Current active result
-  const [traceResult, setTraceResult] = useState<TraceResult>({
-    status: "DELIVERED",
-    termination_reason: "Packet successfully traversed 7 structured cabling and network hops to destination socket.",
-    source: {
-      device: "edge-rt01.reskure.net",
-      role: "EDGE_ROUTER",
-      interface: "HundredGigE0/0/0/0",
-      ip: "198.51.100.1",
-    },
-    destination: {
-      device: "dgx-infer-01.reskure.net",
-      role: "COMPUTE_HOST",
-      interface: "net0 (Inference Cluster API)",
-      ip: "10.100.40.10",
-    },
-    protocol: "HTTPS",
-    destination_port: "443",
-    packet_size_bytes: 1420,
-    payload_label: "Customer Job Application & Screening Feature Vector",
-    total_hops: 7,
-    total_latency_ms: 1.02,
-    bottleneck_mtu: 1500,
-    unencrypted_hops: 0,
-    compliance_score: "COMPLIANT",
-    hops: DEFAULT_TOPOLOGY_HOPS,
-  });
+  const [sourceId, setSourceId] = useState("");
+  const [destId, setDestId] = useState("");
+  const [protocol, setProtocol] = useState("HTTPS");
+  const [port, setPort] = useState(443);
+  const [size, setSize] = useState(1420);
+  const [payload, setPayload] = useState("Applicant screening feature vector (personal data)");
+  const [cut, setCut] = useState<string[]>([]);
+  const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
 
-  // Handle Preset Switching
-  const handleSelectScenario = (scenarioId: string) => {
-    setSelectedScenario(scenarioId);
-    const preset = PRESET_SCENARIOS.find((s) => s.id === scenarioId);
-    if (!preset) return;
+  const [result, setResult] = useState<TraceResult | null>(null);
+  const [traceError, setTraceError] = useState<string | null>(null);
+  const [tracing, setTracing] = useState(false);
+  const [activeHop, setActiveHop] = useState<number | null>(null);
+  const [tab, setTab] = useState<"visual" | "telemetry" | "about">("visual");
+  const [seeding, setSeeding] = useState(false);
 
-    setProtocol(preset.protocol);
-    setPort(preset.port);
-    setPacketSize(preset.packetSize);
-    setPayloadLabel(preset.payload);
-
-    if (scenarioId === "ai-inference") {
-      setTraceResult({
-        status: "DELIVERED",
-        termination_reason: "Packet successfully traversed 7 structured cabling and network hops to destination socket.",
-        source: {
-          device: "edge-rt01.reskure.net",
-          role: "EDGE_ROUTER",
-          interface: "HundredGigE0/0/0/0",
-          ip: "198.51.100.1",
-        },
-        destination: {
-          device: "dgx-infer-01.reskure.net",
-          role: "COMPUTE_HOST",
-          interface: "net0 (Inference Cluster API)",
-          ip: "10.100.40.10",
-        },
-        protocol: "HTTPS",
-        destination_port: "443",
-        packet_size_bytes: 1420,
-        payload_label: preset.payload,
-        total_hops: 7,
-        total_latency_ms: 1.02,
-        bottleneck_mtu: 1500,
-        unencrypted_hops: 0,
-        compliance_score: "COMPLIANT",
-        hops: DEFAULT_TOPOLOGY_HOPS,
-      });
-    } else if (scenarioId === "db-vector-sync") {
-      setTraceResult({
-        status: "DELIVERED",
-        termination_reason: "Jumbo frame vector stream delivered over dedicated 25G storage fabric.",
-        source: {
-          device: "dgx-infer-01.reskure.net",
-          role: "COMPUTE_HOST",
-          interface: "ib0 (InfiniBand/Storage)",
-          ip: "10.100.40.11",
-        },
-        destination: {
-          device: "vectordb-cl01.reskure.net",
-          role: "DATABASE_HOST",
-          interface: "bond0 (Database Cluster)",
-          ip: "10.100.50.25",
-        },
-        protocol: "TCP",
-        destination_port: "5432",
-        packet_size_bytes: 8900,
-        payload_label: preset.payload,
-        total_hops: 2,
-        total_latency_ms: 0.20,
-        bottleneck_mtu: 9000,
-        unencrypted_hops: 0,
-        compliance_score: "COMPLIANT",
-        hops: [
-          {
-            hop_number: 1,
-            device_name: "dgx-infer-01.reskure.net",
-            device_role: "COMPUTE_HOST",
-            interface_name: "ib0 (InfiniBand/Storage)",
-            ip_address: "10.100.40.11",
-            cable_label: "CBL-VDB-007",
-            cable_type: "Single-Mode Fiber (OS2)",
-            bandwidth_gbps: 25,
-            hop_latency_ms: 0.15,
-            cumulative_latency_ms: 0.15,
-            is_encrypted: true,
-            mtu: 9000,
-            action: "PERMIT",
-            notes: "High-throughput RoCEv2 RDMA storage channel active.",
-          },
-          {
-            hop_number: 2,
-            device_name: "vectordb-cl01.reskure.net",
-            device_role: "DATABASE_HOST",
-            interface_name: "bond0 (Database Cluster)",
-            ip_address: "10.100.50.25",
-            cable_label: "Destination Termination",
-            cable_type: "Fiber SMF",
-            bandwidth_gbps: 25,
-            hop_latency_ms: 0.05,
-            cumulative_latency_ms: 0.20,
-            is_encrypted: true,
-            mtu: 9000,
-            action: "DELIVERED",
-            notes: "PostgreSQL pgvector cluster ingested 1536-dimensional embedding vector.",
-          },
-        ],
-      });
-    } else if (scenarioId === "firewall-drop") {
-      setTraceResult({
-        status: "BLOCKED_FIREWALL",
-        termination_reason: "Security inspection filter on sec-fw01 dropped packet: Port 23 (Telnet) prohibited by Zero-Trust policy.",
-        source: {
-          device: "edge-rt01.reskure.net",
-          role: "EDGE_ROUTER",
-          interface: "HundredGigE0/0/0/0",
-          ip: "198.51.100.1",
-        },
-        destination: {
-          device: "dgx-infer-01.reskure.net",
-          role: "COMPUTE_HOST",
-          interface: "net0 (Inference Cluster API)",
-          ip: "10.100.40.10",
-        },
-        protocol: "TCP",
-        destination_port: "23",
-        packet_size_bytes: 64,
-        payload_label: preset.payload,
-        total_hops: 2,
-        total_latency_ms: 0.18,
-        bottleneck_mtu: 1500,
-        unencrypted_hops: 0,
-        compliance_score: "FAILED_DELIVERY",
-        hops: [
-          DEFAULT_TOPOLOGY_HOPS[0],
-          {
-            hop_number: 2,
-            device_name: "sec-fw01.reskure.net",
-            device_role: "FIREWALL_WAF",
-            interface_name: "ethernet1/1 (WAN)",
-            ip_address: "10.100.0.1",
-            cable_label: "None",
-            cable_type: "Internal Firewall Drop",
-            hop_latency_ms: 0.0,
-            cumulative_latency_ms: 0.18,
-            is_encrypted: true,
-            mtu: 1500,
-            action: "FIREWALL_DROP",
-            notes: "DENIED by rule 'DROP-LEGACY-UNENCRYPTED': Cleartext Telnet/RDP forbidden under security audit controls.",
-          },
-        ],
-      });
-    } else if (scenarioId === "severed-cable") {
-      setTraceResult({
-        status: "SEVERED_CABLE",
-        termination_reason: "Physical link loss: Cable TRK-MPO-003 between core-sw01 and patch-pp01 has no optical continuity.",
-        source: {
-          device: "edge-rt01.reskure.net",
-          role: "EDGE_ROUTER",
-          interface: "HundredGigE0/0/0/0",
-          ip: "198.51.100.1",
-        },
-        destination: {
-          device: "tor-sw03.reskure.net",
-          role: "TOR_SWITCH",
-          interface: "Port-Channel 1",
-          ip: "10.100.20.1",
-        },
-        protocol: "HTTPS",
-        destination_port: "443",
-        packet_size_bytes: 1420,
-        payload_label: preset.payload,
-        total_hops: 3,
-        total_latency_ms: 0.40,
-        bottleneck_mtu: 1500,
-        unencrypted_hops: 0,
-        compliance_score: "FAILED_DELIVERY",
-        hops: [
-          DEFAULT_TOPOLOGY_HOPS[0],
-          DEFAULT_TOPOLOGY_HOPS[1],
-          {
-            hop_number: 3,
-            device_name: "core-sw01.reskure.net",
-            device_role: "CORE_SWITCH",
-            interface_name: "Ethernet1/24",
-            ip_address: "10.100.10.1",
-            cable_label: "TRK-MPO-003 [SEVERED]",
-            cable_type: "Multi-Mode Fiber (OM4 MPO-12)",
-            hop_latency_ms: 0.0,
-            cumulative_latency_ms: 0.40,
-            is_encrypted: false,
-            mtu: 9000,
-            action: "CABLE_SEVERED",
-            notes: "Optical signal loss detected on TX/RX strands. NetBox Cable Link state is marked SEVERED.",
-          },
-        ],
-      });
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      setTopology(await call<Topology>("GET", "network/topology/"));
+    } catch (e) {
+      setLoadError(errText(e));
+    } finally {
+      setLoading(false);
     }
-  };
+  }, []);
 
-  // Run or Simulate Traversal
-  const runTrace = async () => {
-    setIsTracing(true);
-    // Animate packet step by step
-    for (let i = 0; i < traceResult.hops.length; i++) {
-      setActiveHopIndex(i);
-      await new Promise((r) => setTimeout(r, 220));
-    }
-    setIsTracing(false);
-    setPacketsSent((prev) => prev + 1);
-  };
-
-  // Continuous traffic simulation loop
   useEffect(() => {
-    let interval: NodeJS.Timeout | null = null;
-    if (continuousSim) {
-      interval = setInterval(() => {
-        setPacketsSent((p) => p + 1);
-      }, 700);
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [continuousSim]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    load();
+  }, [load]);
 
-  const getDeviceIcon = (role: string) => {
-    switch (role) {
-      case "EDGE_ROUTER":
-        return Radio;
-      case "FIREWALL_WAF":
-        return ShieldCheck;
-      case "CORE_SWITCH":
-      case "TOR_SWITCH":
-        return Network;
-      case "PATCH_PANEL":
-        return Layers;
-      case "LOAD_BALANCER":
-        return Share2;
-      case "COMPUTE_HOST":
-        return Cpu;
-      case "DATABASE_HOST":
-        return Database;
-      default:
-        return Server;
-    }
-  };
+  const interfaces = useMemo(() => (topology?.devices ?? []).flatMap((d) => d.interfaces), [topology]);
+  const findPort = useCallback(
+    (spec: string[]) => interfaces.find((i) => i.device_name.startsWith(spec[0]) && i.name.includes(spec[1])),
+    [interfaces],
+  );
+  const availablePresets = useMemo(() => PRESETS.filter((p) => findPort(p.src) && findPort(p.dst)), [findPort]);
 
-  const statusBadge = useMemo(() => {
-    switch (traceResult.status) {
-      case "DELIVERED":
-        return {
-          label: "DELIVERED (200 OK)",
-          bg: "bg-emerald-500/15 border-emerald-500/40 text-emerald-300",
-          icon: CheckCircle2,
-        };
-      case "BLOCKED_FIREWALL":
-        return {
-          label: "BLOCKED BY FIREWALL",
-          bg: "bg-amber-500/15 border-amber-500/40 text-amber-300",
-          icon: ShieldAlert,
-        };
-      case "SEVERED_CABLE":
-        return {
-          label: "SEVERED CABLE / NO SIGNAL",
-          bg: "bg-rose-500/15 border-rose-500/40 text-rose-300",
-          icon: XCircle,
-        };
-      default:
-        return {
-          label: traceResult.status,
-          bg: "bg-slate-500/15 border-slate-500/40 text-slate-300",
-          icon: AlertTriangle,
-        };
+  // Pick sensible defaults once the network has loaded.
+  useEffect(() => {
+    if (!interfaces.length || sourceId) return;
+    const first = availablePresets[0];
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setSourceId((first ? findPort(first.src) : interfaces[0])?.id ?? "");
+    setDestId((first ? findPort(first.dst) : interfaces[interfaces.length - 1])?.id ?? "");
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [interfaces, availablePresets, findPort, sourceId]);
+
+  function applyPreset(id: string) {
+    const p = PRESETS.find((x) => x.id === id);
+    const s = p && findPort(p.src);
+    const d = p && findPort(p.dst);
+    if (!p || !s || !d) return;
+    setSelectedPreset(id);
+    setSourceId(s.id);
+    setDestId(d.id);
+    setProtocol(p.protocol);
+    setPort(p.port);
+    setSize(p.size);
+    setPayload(p.payload);
+    setCut(p.cut);
+    setResult(null);
+    setTraceError(null);
+  }
+
+  async function seed(replace = false) {
+    setSeeding(true);
+    setLoadError(null);
+    try {
+      await call("POST", "network/demo/seed/", { replace });
+      await load();
+    } catch (e) {
+      setLoadError(errText(e));
+    } finally {
+      setSeeding(false);
     }
-  }, [traceResult.status]);
+  }
+
+  async function runTrace() {
+    setTracing(true);
+    setTraceError(null);
+    setActiveHop(null);
+    try {
+      const r = await call<TraceResult>("POST", "network/trace/", {
+        source_interface_id: sourceId,
+        destination_interface_id: destId,
+        protocol,
+        destination_port: port,
+        packet_size_bytes: size,
+        payload_label: payload,
+        assume_severed_cables: cut,
+      });
+      setResult(r);
+      for (let i = 0; i < r.hops.length; i++) {
+        setActiveHop(i);
+        await new Promise((res) => setTimeout(res, 180));
+      }
+    } catch (e) {
+      setResult(null);
+      setTraceError(errText(e));
+    } finally {
+      setTracing(false);
+    }
+  }
+
+  const badge = result ? (STATUS_BADGE[result.status] ?? { label: result.status, tone: "bg-slate-500/15 border-slate-500/40 text-slate-300", icon: AlertTriangle }) : null;
+  const toggleCut = (label: string) => setCut((c) => (c.includes(label) ? c.filter((x) => x !== label) : [...c, label]));
+
+  if (loading) return <p role="status" className="text-sm text-slate-400">Loading the network...</p>;
+
+  if (loadError)
+    return (
+      <div role="alert" className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-5 space-y-3">
+        <p className="text-sm text-rose-200">{loadError}</p>
+        <button type="button" onClick={load} className={ghostButtonClass}>Try again</button>
+      </div>
+    );
+
+  if (!topology || topology.devices.length === 0)
+    return (
+      <div className="glass-panel p-10 text-center space-y-4">
+        <Network className="w-8 h-8 text-slate-500 mx-auto" aria-hidden="true" />
+        <h2 className="text-sm font-semibold text-slate-200">No network recorded yet</h2>
+        <p className="text-xs text-slate-400 max-w-md mx-auto">
+          Record devices, ports and cables through the API, or load a sample enterprise network (an administrator action) to try the tracer.
+        </p>
+        <button type="button" onClick={() => seed(false)} disabled={seeding} className={buttonClass}>
+          {seeding ? "Loading..." : "Load the sample network"}
+        </button>
+      </div>
+    );
+
+  const hasUnencrypted = (result?.unencrypted_hops ?? 0) > 0;
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-6">
-      {/* Top Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-white/10">
-        <div>
-          <div className="flex items-center gap-2.5 mb-1.5">
-            <div className="w-8 h-8 rounded-lg bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
-              <Network className="w-4 h-4" />
-            </div>
-            <h1 className="text-2xl font-bold tracking-tight text-white">
-              Data Packet Traversal & Cable Path Tracer
-            </h1>
-            <span className="px-2 py-0.5 text-[11px] font-semibold tracking-wide uppercase rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
-              NetBox DCIM Engine
-            </span>
-          </div>
-          <p className="text-sm text-slate-400 max-w-3xl">
-            Trace end-to-end data packet travelance across physical structured cabling, patch panel pass-throughs,
-            leaf-spine switches, and security checkpoints with latency, MTU bottleneck analysis, and transit encryption verification.
-          </p>
-        </div>
+    <div className="space-y-6">
+      <p className="text-xs text-slate-400 max-w-3xl">
+        Follow a packet across the cabling, patch panels, firewalls and switches you have recorded for {topology.tenant_name}. The tracer reads your stored network and checks
+        device status, firewall rules, cables, MTU and encryption flags along the way. It is a model built from your records: it does not send traffic, and it is only as accurate as the inventory.
+      </p>
 
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setContinuousSim(!continuousSim)}
-            className={`inline-flex items-center gap-2 text-xs font-semibold px-3 py-2 rounded-lg border transition-colors ${
-              continuousSim
-                ? "bg-rose-500/20 border-rose-500/40 text-rose-300 animate-pulse"
-                : "bg-slate-800/80 hover:bg-slate-800 border-white/10 text-slate-300"
-            }`}
-          >
-            <Activity className="w-3.5 h-3.5 text-cyan-400" />
-            {continuousSim ? "Stop Traffic Stream" : "Continuous Traffic Sim"}
-          </button>
-
-          <button
-            onClick={runTrace}
-            disabled={isTracing}
-            className="inline-flex items-center gap-2 bg-gradient-to-r from-cyan-600 to-sky-600 hover:from-cyan-500 hover:to-sky-500 text-white font-semibold text-xs px-4 py-2 rounded-lg shadow-lg shadow-cyan-900/30 transition-all disabled:opacity-50"
-          >
-            <Play className={`w-3.5 h-3.5 ${isTracing ? "animate-spin" : ""}`} />
-            {isTracing ? "Tracing Hops..." : "Trace Packet Path"}
-          </button>
-        </div>
-      </div>
-
-      {/* Preset Scenarios Carousel / Selector */}
-      <div className="space-y-2">
-        <div className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-2">
-          <Zap className="w-3.5 h-3.5 text-cyan-400" />
-          <span>Preset Inspection Scenarios</span>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-          {PRESET_SCENARIOS.map((scenario) => {
-            const isSelected = selectedScenario === scenario.id;
-            return (
-              <button
-                key={scenario.id}
-                onClick={() => handleSelectScenario(scenario.id)}
-                className={`text-left p-3.5 rounded-xl border transition-all relative overflow-hidden group ${
-                  isSelected
-                    ? "bg-gradient-to-br from-cyan-950/60 via-slate-900 to-[#080d1a] border-cyan-500/50 shadow-md shadow-cyan-950/40"
-                    : "bg-slate-900/40 hover:bg-slate-900/70 border-white/5 hover:border-white/15"
-                }`}
-              >
-                {isSelected && (
-                  <div className="absolute top-0 right-0 w-16 h-16 bg-cyan-500/10 rounded-bl-full pointer-events-none" />
-                )}
-                <div className="font-semibold text-sm text-slate-100 group-hover:text-cyan-300 transition-colors">
-                  {scenario.title}
-                </div>
-                <p className="text-xs text-slate-400 mt-1 line-clamp-2 leading-relaxed">
-                  {scenario.description}
-                </p>
-                <div className="mt-2.5 flex items-center gap-2 text-[11px] font-mono text-cyan-400/90">
-                  <span className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10">
-                    {scenario.protocol}:{scenario.port}
-                  </span>
-                  <span className="text-slate-500">•</span>
-                  <span>{scenario.packetSize}B</span>
-                </div>
+      <section aria-labelledby="presets-h" className="space-y-2">
+        <h2 id="presets-h" className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-2">
+          <Zap className="w-3.5 h-3.5 text-cyan-400" aria-hidden="true" /> Preset scenarios
+        </h2>
+        {availablePresets.length === 0 ? (
+          <p className="text-xs text-slate-500">Presets need the sample network. Choose ports yourself below.</p>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+            {availablePresets.map((p) => (
+              <button key={p.id} type="button" onClick={() => applyPreset(p.id)} aria-pressed={selectedPreset === p.id}
+                className={`text-left p-3.5 rounded-xl border transition-colors focus:outline-none focus:ring-2 focus:ring-cyan-400 ${selectedPreset === p.id ? "bg-cyan-950/50 border-cyan-500/50" : "bg-slate-900/40 hover:bg-slate-900/70 border-white/10"}`}>
+                <div className="font-semibold text-sm text-slate-100">{p.title}</div>
+                <p className="text-xs text-slate-400 mt-1 leading-relaxed">{p.description}</p>
+                <div className="mt-2 text-[11px] font-mono text-cyan-400/90">{p.protocol}:{p.port} · {p.size}B</div>
               </button>
-            );
-          })}
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section aria-labelledby="cfg-h" className="glass-panel p-5 space-y-4">
+        <h2 id="cfg-h" className="text-sm font-bold text-white">Trace settings</h2>
+        <div className="grid md:grid-cols-2 gap-4">
+          <Field label="From (source port)" htmlFor="t_src">
+            <select id="t_src" value={sourceId} onChange={(e) => setSourceId(e.target.value)} className={inputClass}>
+              {(topology.devices).map((d) => (
+                <optgroup key={d.id} label={`${d.name} (${d.role.replaceAll("_", " ").toLowerCase()})`}>
+                  {d.interfaces.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
+                </optgroup>
+              ))}
+            </select>
+          </Field>
+          <Field label="To (destination port)" htmlFor="t_dst">
+            <select id="t_dst" value={destId} onChange={(e) => setDestId(e.target.value)} className={inputClass}>
+              {(topology.devices).map((d) => (
+                <optgroup key={d.id} label={`${d.name} (${d.role.replaceAll("_", " ").toLowerCase()})`}>
+                  {d.interfaces.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
+                </optgroup>
+              ))}
+            </select>
+          </Field>
         </div>
-      </div>
-
-      {/* Configuration & Packet Metadata Bar */}
-      <div className="glass-panel p-4 grid grid-cols-1 md:grid-cols-5 gap-4 items-center">
-        <div>
-          <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-            Source Origin (NetBox Termination)
-          </label>
-          <div className="text-xs font-mono font-medium text-slate-200 truncate">
-            {traceResult.source.device}
-          </div>
-          <div className="text-[11px] text-cyan-400 font-mono">
-            {traceResult.source.interface}
-          </div>
+        <div className="grid md:grid-cols-4 gap-4">
+          <Field label="Protocol" htmlFor="t_proto">
+            <select id="t_proto" value={protocol} onChange={(e) => setProtocol(e.target.value)} className={inputClass}>
+              {PROTOCOLS.map((p) => <option key={p}>{p}</option>)}
+            </select>
+          </Field>
+          <Field label="Destination port" htmlFor="t_port">
+            <input id="t_port" type="number" min={0} max={65535} value={port} onChange={(e) => setPort(Number(e.target.value))} className={inputClass} />
+          </Field>
+          <Field label="Packet size (bytes)" htmlFor="t_size" hint={size > 1500 ? "Larger than a standard 1500-byte frame" : undefined}>
+            <input id="t_size" type="number" min={64} max={65535} value={size} onChange={(e) => setSize(Number(e.target.value))} className={inputClass} />
+          </Field>
+          <Field label="What it carries" htmlFor="t_payload">
+            <input id="t_payload" maxLength={200} value={payload} onChange={(e) => setPayload(e.target.value)} className={inputClass} />
+          </Field>
         </div>
-
-        <div>
-          <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-            Destination Endpoint
-          </label>
-          <div className="text-xs font-mono font-medium text-slate-200 truncate">
-            {traceResult.destination.device}
+        <fieldset>
+          <legend className="text-xs font-medium text-slate-300">What if these cables were cut? (this trace only; nothing is saved)</legend>
+          <div className="flex flex-wrap gap-x-5 gap-y-2 mt-2">
+            {topology.cables.map((c) => (
+              <label key={c.id} className="flex items-center gap-1.5 text-xs text-slate-200">
+                <input type="checkbox" checked={cut.includes(c.label)} onChange={() => toggleCut(c.label)} className="accent-cyan-500" />
+                {c.label}{c.status !== "CONNECTED" ? ` (${c.status.toLowerCase()})` : ""}
+              </label>
+            ))}
           </div>
-          <div className="text-[11px] text-indigo-400 font-mono">
-            {traceResult.destination.interface}
-          </div>
+        </fieldset>
+        <div className="flex items-center gap-3">
+          <button type="button" onClick={runTrace} disabled={tracing || !sourceId || !destId} className={buttonClass}>
+            <Play className={`w-4 h-4 ${tracing ? "animate-pulse" : ""}`} aria-hidden="true" />
+            {tracing ? "Tracing..." : "Trace packet path"}
+          </button>
+          {traceError && <p role="alert" className="text-xs text-rose-300">{traceError}</p>}
         </div>
+      </section>
 
-        <div>
-          <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-            Protocol & Port
-          </label>
-          <div className="flex items-center gap-2">
-            <span className="px-2 py-1 rounded bg-slate-800 text-xs font-mono font-bold text-cyan-300 border border-white/10">
-              {protocol}
-            </span>
-            <span className="text-xs font-mono text-slate-300">Port {port}</span>
-          </div>
-        </div>
+      {!result && !traceError && (
+        <p className="text-sm text-slate-400" role="status">Choose a preset or two ports, then trace. Nothing has been traced yet.</p>
+      )}
 
-        <div>
-          <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-            Frame / Packet Size
-          </label>
-          <div className="text-xs font-mono text-slate-200 flex items-center gap-2">
-            <span>{packetSize} Bytes</span>
-            {packetSize > 1500 && (
-              <span className="px-1.5 py-0.5 text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 rounded font-sans">
-                Jumbo Frame
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-            Simulated Ingestion Traffic
-          </label>
-          <div className="text-xs font-mono text-emerald-400 flex items-center gap-1.5">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-            </span>
-            <span>{packetsSent.toLocaleString()} frames emitted</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Traversal Executive Scorecard */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        {/* Status */}
-        <div className="glass-panel p-4 flex flex-col justify-between">
-          <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-            Traversal Status
-          </div>
-          <div className="my-2">
-            <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-bold ${statusBadge.bg}`}>
-              <statusBadge.icon className="w-4 h-4" />
-              <span>{statusBadge.label}</span>
-            </div>
-          </div>
-          <div className="text-[11px] text-slate-400 line-clamp-1">
-            {traceResult.termination_reason}
-          </div>
-        </div>
-
-        {/* Total Latency */}
-        <div className="glass-panel p-4 flex flex-col justify-between">
-          <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-            <span>Accumulated Latency</span>
-            <Activity className="w-3.5 h-3.5 text-cyan-400" />
-          </div>
-          <div className="my-1.5">
-            <div className="text-2xl font-bold text-white font-mono">
-              {traceResult.total_latency_ms} <span className="text-sm font-normal text-slate-400">ms</span>
-            </div>
-          </div>
-          <div className="text-[11px] text-slate-400">
-            Across {traceResult.total_hops} structured hops (avg {(traceResult.total_latency_ms / (traceResult.total_hops || 1)).toFixed(3)} ms/hop)
-          </div>
-        </div>
-
-        {/* Bottleneck MTU */}
-        <div className="glass-panel p-4 flex flex-col justify-between">
-          <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-            <span>Bottleneck MTU</span>
-            <Layers className="w-3.5 h-3.5 text-indigo-400" />
-          </div>
-          <div className="my-1.5">
-            <div className="text-2xl font-bold text-white font-mono">
-              {traceResult.bottleneck_mtu} <span className="text-sm font-normal text-slate-400">Bytes</span>
-            </div>
-          </div>
-          <div className="text-[11px] text-slate-400">
-            {packetSize > traceResult.bottleneck_mtu
-              ? "⚠️ Packet fragmented: exceeds path MTU"
-              : "✓ Zero fragmentation: full frame headroom"}
-          </div>
-        </div>
-
-        {/* Transit Encryption Audit */}
-        <div className="glass-panel p-4 flex flex-col justify-between">
-          <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-            <span>Transit Encryption Audit</span>
-            {traceResult.unencrypted_hops === 0 ? (
-              <Lock className="w-3.5 h-3.5 text-emerald-400" />
-            ) : (
-              <Unlock className="w-3.5 h-3.5 text-amber-400" />
-            )}
-          </div>
-          <div className="my-1.5">
-            <div className="text-base font-bold text-emerald-300 flex items-center gap-1.5">
-              <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              <span>DPDP / ISO-27001 Passed</span>
-            </div>
-          </div>
-          <div className="text-[11px] text-slate-400">
-            {traceResult.unencrypted_hops === 0
-              ? "100% of traversed physical links encrypted"
-              : `Warning: ${traceResult.unencrypted_hops} unencrypted segment detected`}
-          </div>
-        </div>
-      </div>
-
-      {/* Tabs: Visual Topology vs Telemetry Table vs NetBox Schema */}
-      <div className="flex items-center gap-3 border-b border-white/10 pb-2">
-        <button
-          onClick={() => setActiveTab("visual")}
-          className={`flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${
-            activeTab === "visual"
-              ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30"
-              : "text-slate-400 hover:text-white"
-          }`}
-        >
-          <Network className="w-3.5 h-3.5" />
-          <span>Interactive Cable Path & Packet Animation</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab("telemetry")}
-          className={`flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${
-            activeTab === "telemetry"
-              ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30"
-              : "text-slate-400 hover:text-white"
-          }`}
-        >
-          <Activity className="w-3.5 h-3.5" />
-          <span>Hop-by-Hop Telemetry Table</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab("netbox-schema")}
-          className={`flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${
-            activeTab === "netbox-schema"
-              ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30"
-              : "text-slate-400 hover:text-white"
-          }`}
-        >
-          <Info className="w-3.5 h-3.5" />
-          <span>NetBox Cable Tracing Architecture</span>
-        </button>
-      </div>
-
-      {/* Tab 1: Visual Topology & Moving Packet Animation */}
-      {activeTab === "visual" && (
-        <div className="glass-panel p-6 space-y-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-sm font-bold text-white flex items-center gap-2">
-                <span>NetBox Structured Path Layout</span>
-                <span className="text-[11px] font-normal text-slate-400">
-                  (Physical links & passive pass-through mappings)
-                </span>
-              </h2>
-            </div>
-            <div className="flex items-center gap-4 text-xs font-mono text-slate-400">
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
-                <span>Traveling Packet Signal</span>
+      {result && badge && (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4" aria-live="polite">
+            <div className="glass-panel p-4 space-y-2">
+              <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Result</div>
+              <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-bold ${badge.tone}`}>
+                <badge.icon className="w-4 h-4" aria-hidden="true" />
+                <span>{badge.label}</span>
               </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-sm bg-purple-500/80" />
-                <span>Patch Panel Cross-Connect</span>
+              <p className="text-[11px] text-slate-400">{result.termination_reason}</p>
+            </div>
+            <div className="glass-panel p-4">
+              <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                <span>Accumulated latency</span><Activity className="w-3.5 h-3.5 text-cyan-400" aria-hidden="true" />
               </div>
+              <div className="text-2xl font-bold text-white font-mono my-1.5">{result.total_latency_ms} <span className="text-sm font-normal text-slate-400">ms</span></div>
+              <p className="text-[11px] text-slate-400">Across {result.total_hops} hop{result.total_hops === 1 ? "" : "s"}. Latency comes from the figures recorded for each cable.</p>
+            </div>
+            <div className="glass-panel p-4">
+              <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                <span>Smallest MTU on the path</span><Layers className="w-3.5 h-3.5 text-indigo-400" aria-hidden="true" />
+              </div>
+              <div className="text-2xl font-bold text-white font-mono my-1.5">{result.bottleneck_mtu} <span className="text-sm font-normal text-slate-400">bytes</span></div>
+              <p className="text-[11px] text-slate-400">
+                {result.packet_size_bytes > result.bottleneck_mtu ? "The packet is larger than the path MTU and would be fragmented." : "The packet fits without fragmentation."}
+              </p>
+            </div>
+            <div className="glass-panel p-4">
+              <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                <span>Transit encryption</span>
+                {hasUnencrypted ? <Unlock className="w-3.5 h-3.5 text-amber-400" aria-hidden="true" /> : <Lock className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />}
+              </div>
+              <div className={`text-sm font-bold my-2 ${hasUnencrypted ? "text-amber-300" : "text-emerald-300"}`}>
+                {hasUnencrypted ? `${result.unencrypted_hops} link${result.unencrypted_hops === 1 ? "" : "s"} recorded as unencrypted` : "Every traversed link is recorded as encrypted"}
+              </div>
+              <p className="text-[11px] text-slate-400">From the cable inventory. It has not been verified on the wire, and it is not a compliance finding by itself.</p>
             </div>
           </div>
 
-          {/* Interactive Topology Nodes Diagram */}
-          <div className="relative overflow-x-auto py-8 px-4 bg-slate-950/60 rounded-xl border border-white/5">
-            <div className="flex items-center justify-between min-w-[900px] relative">
-              {/* Background Cable Trunk Line */}
-              <div className="absolute top-1/2 left-8 right-8 h-1 bg-gradient-to-r from-cyan-500/30 via-sky-500/20 to-indigo-500/30 -translate-y-1/2 z-0" />
+          <div role="tablist" aria-label="Trace views" className="flex flex-wrap gap-2 border-b border-white/10 pb-2">
+            {([["visual", "Path"], ["telemetry", "Hop-by-hop table"], ["about", "How it works"]] as const).map(([key, label]) => (
+              <button key={key} role="tab" aria-selected={tab === key} onClick={() => setTab(key)}
+                className={`text-xs font-semibold px-3 py-1.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-400 ${tab === key ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30" : "text-slate-400 hover:text-white border border-transparent"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
 
-              {/* Hops */}
-              {traceResult.hops.map((hop, index) => {
-                const IconComponent = getDeviceIcon(hop.device_role);
-                const isActive = activeHopIndex === index || isTracing;
-                const isSevered = hop.action === "CABLE_SEVERED";
-                const isBlocked = hop.action === "FIREWALL_DROP";
-                const isDelivered = hop.action === "DELIVERED";
-                const isPassThrough = hop.action === "PASS_THROUGH";
+          {tab === "visual" && (
+            <div className="glass-panel p-6 space-y-6">
+              <div className="overflow-x-auto py-6 px-4 bg-slate-950/60 rounded-xl border border-white/5">
+                <ol className="flex items-start gap-4 min-w-max" aria-label="Hops in order">
+                  {result.hops.map((hop, index) => {
+                    const Icon = iconFor(hop.device_role);
+                    const severed = hop.action === "CABLE_SEVERED";
+                    const blocked = hop.action === "FIREWALL_DROP" || hop.action === "DROP_OFFLINE";
+                    const delivered = hop.action === "DELIVERED";
+                    const passive = hop.action === "PASS_THROUGH";
+                    const active = activeHop === index;
+                    const tone = severed ? "bg-rose-950/60 border-rose-500" : blocked ? "bg-amber-950/60 border-amber-500" : delivered ? "bg-emerald-950/60 border-emerald-500"
+                      : passive ? "bg-purple-950/60 border-purple-400/80" : active ? "bg-cyan-950/80 border-cyan-400" : "bg-slate-900 border-white/15";
+                    return (
+                      <li key={hop.hop_number}>
+                        <button type="button" onClick={() => setActiveHop(index)} aria-pressed={active}
+                          className="flex flex-col items-center w-28 group focus:outline-none focus:ring-2 focus:ring-cyan-400 rounded-lg">
+                          <span className="text-[10px] font-mono text-slate-400 mb-2 font-bold">HOP {hop.hop_number}</span>
+                          <span className={`w-16 h-16 rounded-xl flex items-center justify-center border-2 transition-transform ${tone} ${active ? "scale-110" : ""}`}>
+                            <Icon className="w-7 h-7 text-slate-100" aria-hidden="true" />
+                          </span>
+                          <span className="mt-3 text-center">
+                            <span className="block text-xs font-semibold text-slate-200 truncate w-28">{hop.device_name.split(".")[0]}</span>
+                            <span className="block text-[10px] font-mono text-slate-400 truncate w-28">{hop.interface_name}</span>
+                            <span className="block text-[10px] text-cyan-400/80 font-mono mt-0.5">+{hop.hop_latency_ms} ms</span>
+                            <span className="block text-[10px] text-slate-300 mt-0.5">{hop.action.replaceAll("_", " ").toLowerCase()}</span>
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ol>
+              </div>
 
-                return (
-                  <div
-                    key={index}
-                    onClick={() => setActiveHopIndex(index)}
-                    className="relative z-10 flex flex-col items-center group cursor-pointer"
-                  >
-                    {/* Hop Index Bubble */}
-                    <div className="text-[10px] font-mono text-slate-400 mb-2 font-bold">
-                      HOP #{hop.hop_number}
+              {activeHop !== null && result.hops[activeHop] && (
+                <div className="p-4 rounded-xl border border-cyan-500/30 bg-cyan-950/20 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-2">
+                    <span className="text-xs font-bold text-white">Hop {result.hops[activeHop].hop_number}: {result.hops[activeHop].device_name}</span>
+                    <span className="text-xs font-mono text-slate-400">Cumulative delay <strong className="text-cyan-300">{result.hops[activeHop].cumulative_latency_ms} ms</strong></span>
+                  </div>
+                  <dl className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
+                    <div><dt className="text-slate-400">Port</dt><dd className="font-mono text-slate-200">{result.hops[activeHop].interface_name}</dd></div>
+                    <div><dt className="text-slate-400">Cable</dt><dd className="font-mono text-slate-200">{result.hops[activeHop].cable_label} ({result.hops[activeHop].cable_type})</dd></div>
+                    <div><dt className="text-slate-400">MTU</dt><dd className="font-mono text-slate-200">{result.hops[activeHop].mtu} bytes</dd></div>
+                    <div>
+                      <dt className="text-slate-400">Encryption (as recorded)</dt>
+                      <dd className={`font-mono ${result.hops[activeHop].is_encrypted ? "text-emerald-400" : "text-amber-300"}`}>
+                        {result.hops[activeHop].is_encrypted ? "Recorded as encrypted" : "Not encrypted"}
+                      </dd>
                     </div>
-
-                    {/* Node Visual Box */}
-                    <div
-                      className={`w-16 h-16 rounded-xl flex items-center justify-center border-2 transition-all duration-300 relative ${
-                        isSevered
-                          ? "bg-rose-950/60 border-rose-500 shadow-lg shadow-rose-950/50"
-                          : isBlocked
-                          ? "bg-amber-950/60 border-amber-500 shadow-lg shadow-amber-950/50"
-                          : isDelivered
-                          ? "bg-emerald-950/60 border-emerald-500 shadow-lg shadow-emerald-950/50"
-                          : isPassThrough
-                          ? "bg-purple-950/60 border-purple-400/80 shadow-md shadow-purple-950/40"
-                          : isActive
-                          ? "bg-cyan-950/80 border-cyan-400 scale-110 shadow-lg shadow-cyan-500/40"
-                          : "bg-slate-900 border-white/15 hover:border-cyan-400/60 hover:scale-105"
-                      }`}
-                    >
-                      <IconComponent
-                        className={`w-7 h-7 ${
-                          isSevered
-                            ? "text-rose-400"
-                            : isBlocked
-                            ? "text-amber-400"
-                            : isDelivered
-                            ? "text-emerald-400"
-                            : isPassThrough
-                            ? "text-purple-300"
-                            : "text-cyan-300"
-                        }`}
-                      />
-
-                      {/* Traveling photon dot indicator */}
-                      {(activeHopIndex === index || continuousSim) && (
-                        <span className="absolute -top-1 -right-1 flex h-3 w-3">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-3 w-3 bg-cyan-400"></span>
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Device Label */}
-                    <div className="mt-3 text-center w-28">
-                      <div className="text-xs font-semibold text-slate-200 truncate group-hover:text-cyan-300 transition-colors">
-                        {hop.device_name.split(".")[0]}
-                      </div>
-                      <div className="text-[10px] font-mono text-slate-400 truncate">
-                        {hop.interface_name}
-                      </div>
-                      <div className="text-[9px] text-cyan-400/80 font-mono mt-0.5">
-                        +{hop.hop_latency_ms} ms
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Hop Detail Inspection Card */}
-          {activeHopIndex !== null && traceResult.hops[activeHopIndex] && (
-            <div className="p-4 rounded-xl border border-cyan-500/30 bg-cyan-950/20 space-y-3 animate-fadeIn">
-              <div className="flex items-center justify-between border-b border-white/10 pb-2">
-                <div className="flex items-center gap-2">
-                  <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-mono text-xs font-bold">
-                    HOP #{traceResult.hops[activeHopIndex].hop_number} INSPECTION
-                  </span>
-                  <span className="text-xs font-bold text-white">
-                    {traceResult.hops[activeHopIndex].device_name}
-                  </span>
+                  </dl>
+                  {result.hops[activeHop].mtu_issue && <p className="text-xs text-amber-200">{result.hops[activeHop].mtu_issue}</p>}
+                  <p className="p-2.5 rounded-lg bg-black/40 text-xs text-slate-300 font-mono"><strong>Note:</strong> {result.hops[activeHop].notes}</p>
                 </div>
-                <div className="text-xs font-mono text-slate-400">
-                  Cumulative Delay:{" "}
-                  <strong className="text-cyan-300 font-bold">
-                    {traceResult.hops[activeHopIndex].cumulative_latency_ms} ms
-                  </strong>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
-                <div>
-                  <div className="text-slate-400 text-[11px]">Termination Interface</div>
-                  <div className="font-mono text-slate-200 font-medium">
-                    {traceResult.hops[activeHopIndex].interface_name}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-slate-400 text-[11px]">Cable Medium & Tag</div>
-                  <div className="font-mono text-slate-200 font-medium">
-                    {traceResult.hops[activeHopIndex].cable_label} ({traceResult.hops[activeHopIndex].cable_type})
-                  </div>
-                </div>
-                <div>
-                  <div className="text-slate-400 text-[11px]">Interface MTU</div>
-                  <div className="font-mono text-slate-200 font-medium">
-                    {traceResult.hops[activeHopIndex].mtu} Bytes
-                  </div>
-                </div>
-                <div>
-                  <div className="text-slate-400 text-[11px]">Link Encryption</div>
-                  <div className="font-mono text-emerald-400 font-medium flex items-center gap-1">
-                    <Lock className="w-3 h-3" />
-                    <span>Active (AES-GCM / MACsec)</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-2.5 rounded-lg bg-black/40 text-xs text-slate-300 font-mono">
-                <strong>Diagnostic Note:</strong> {traceResult.hops[activeHopIndex].notes}
-              </div>
+              )}
             </div>
           )}
-        </div>
-      )}
 
-      {/* Tab 2: Hop-by-Hop Telemetry Table */}
-      {activeTab === "telemetry" && (
-        <div className="glass-panel overflow-hidden">
-          <div className="p-4 border-b border-white/10 flex items-center justify-between">
-            <h2 className="text-sm font-bold text-white">Sequential Data Path Hops</h2>
-            <span className="text-xs text-slate-400">
-              Total Distance: {traceResult.hops.length} network hops
-            </span>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-900/60 text-slate-400 uppercase text-[10px] tracking-wider border-b border-white/10">
-                <tr>
-                  <th className="py-3 px-4">Hop</th>
-                  <th className="py-3 px-4">Device & Role</th>
-                  <th className="py-3 px-4">Termination Port</th>
-                  <th className="py-3 px-4">Cable / Link</th>
-                  <th className="py-3 px-4">Delay</th>
-                  <th className="py-3 px-4">MTU</th>
-                  <th className="py-3 px-4">Action</th>
-                  <th className="py-3 px-4">Inspection Notes</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5 font-mono">
-                {traceResult.hops.map((hop) => (
-                  <tr key={hop.hop_number} className="hover:bg-white/5 transition-colors">
-                    <td className="py-3 px-4 font-bold text-cyan-400">
-                      #{hop.hop_number}
-                    </td>
-                    <td className="py-3 px-4">
-                      <div className="font-sans font-semibold text-slate-200">
-                        {hop.device_name}
-                      </div>
-                      <div className="text-[10px] text-slate-400">{hop.device_role}</div>
-                    </td>
-                    <td className="py-3 px-4 text-slate-300">{hop.interface_name}</td>
-                    <td className="py-3 px-4">
-                      <div className="text-cyan-300">{hop.cable_label}</div>
-                      <div className="text-[10px] text-slate-400">{hop.cable_type}</div>
-                    </td>
-                    <td className="py-3 px-4">
-                      <div>+{hop.hop_latency_ms} ms</div>
-                      <div className="text-[10px] text-slate-400">{hop.cumulative_latency_ms} ms total</div>
-                    </td>
-                    <td className="py-3 px-4 text-slate-300">{hop.mtu} B</td>
-                    <td className="py-3 px-4">
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          hop.action === "DELIVERED"
-                            ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                            : hop.action === "FIREWALL_DROP"
-                            ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                            : hop.action === "CABLE_SEVERED"
-                            ? "bg-rose-500/20 text-rose-300 border border-rose-500/30"
-                            : "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30"
-                        }`}
-                      >
-                        {hop.action}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-slate-300 font-sans max-w-xs truncate">
-                      {hop.notes}
-                    </td>
+          {tab === "telemetry" && (
+            <div className="glass-panel overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <caption className="sr-only">Hops of the traced path</caption>
+                <thead className="bg-slate-900/60 text-slate-400 uppercase text-[10px] tracking-wider border-b border-white/10">
+                  <tr>
+                    <th scope="col" className="py-3 px-4">Hop</th><th scope="col" className="py-3 px-4">Device</th><th scope="col" className="py-3 px-4">Port</th>
+                    <th scope="col" className="py-3 px-4">Cable</th><th scope="col" className="py-3 px-4">Delay</th><th scope="col" className="py-3 px-4">MTU</th>
+                    <th scope="col" className="py-3 px-4">Action</th><th scope="col" className="py-3 px-4">Notes</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Tab 3: NetBox Architecture & Reference Overview */}
-      {activeTab === "netbox-schema" && (
-        <div className="glass-panel p-6 space-y-6">
-          <div className="border-b border-white/10 pb-4">
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <Network className="w-5 h-5 text-cyan-400" />
-              <span>NetBox Cable Tracing & Traversal Methodology</span>
-            </h2>
-            <p className="text-xs text-slate-400 mt-1">
-              How this module utilizes NetBox&apos;s OSI Layer-1 & Layer-2 Source of Truth abstractions to model packet travelance.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-xs leading-relaxed">
-            <div className="p-4 rounded-xl bg-slate-900/50 border border-white/10 space-y-2">
-              <div className="font-bold text-sm text-cyan-300 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-cyan-400" />
-                1. Terminations & Interfaces
-              </div>
-              <p className="text-slate-400">
-                In NetBox, every physical port or logical interface is a termination point. This allows modeling routers, switches, firewalls, and server sockets with individual MTU parameters and IP address assignments.
-              </p>
+                </thead>
+                <tbody className="divide-y divide-white/5 font-mono">
+                  {result.hops.map((hop) => (
+                    <tr key={hop.hop_number}>
+                      <th scope="row" className="py-3 px-4 font-bold text-cyan-400 text-left">#{hop.hop_number}</th>
+                      <td className="py-3 px-4"><div className="font-sans font-semibold text-slate-200">{hop.device_name}</div><div className="text-[10px] text-slate-400">{hop.device_role}</div></td>
+                      <td className="py-3 px-4 text-slate-300">{hop.interface_name}</td>
+                      <td className="py-3 px-4"><div className="text-cyan-300">{hop.cable_label}</div><div className="text-[10px] text-slate-400">{hop.cable_type}</div></td>
+                      <td className="py-3 px-4"><div>+{hop.hop_latency_ms} ms</div><div className="text-[10px] text-slate-400">{hop.cumulative_latency_ms} ms total</div></td>
+                      <td className="py-3 px-4 text-slate-300">{hop.mtu} B</td>
+                      <td className="py-3 px-4 text-slate-100">{hop.action.replaceAll("_", " ")}</td>
+                      <td className="py-3 px-4 text-slate-300 font-sans">{hop.notes}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
+          )}
 
-            <div className="p-4 rounded-xl bg-slate-900/50 border border-white/10 space-y-2">
-              <div className="font-bold text-sm text-purple-300 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-purple-400" />
-                2. Pass-Through Structured Cabling
-              </div>
-              <p className="text-slate-400">
-                Unlike simple point-to-point lines, NetBox models patch panels with Front Ports and Rear Ports. The traversal engine recursively steps through internal optical pass-throughs to continue following data across inter-rack backbone trunks.
-              </p>
+          {tab === "about" && (
+            <div className="glass-panel p-6 grid md:grid-cols-3 gap-6 text-xs leading-relaxed">
+              <div className="space-y-2"><h3 className="font-bold text-sm text-cyan-300 flex items-center gap-2"><Info className="w-4 h-4" aria-hidden="true" /> Ports and cables</h3>
+                <p className="text-slate-400">Every port is a termination point with its own MTU and address. A cable joins two ports and carries latency, bandwidth and an encryption flag. The tracer finds the shortest route over cables, passive patch-panel cross-connects and forwarding inside a device.</p></div>
+              <div className="space-y-2"><h3 className="font-bold text-sm text-purple-300">What is checked on the way</h3>
+                <p className="text-slate-400">At each device: whether it is online and whether a firewall rule drops or inspects the traffic (ports can be single, a list such as 23,3389, or a range such as 8000-9000). On each cable: whether it is cut, degraded or unencrypted. Along the path: the smallest MTU.</p></div>
+              <div className="space-y-2"><h3 className="font-bold text-sm text-emerald-300">What it does not tell you</h3>
+                <p className="text-slate-400">It reads your records. It does not send traffic or prove that encryption is active on the wire. Use it to find gaps in the inventory and in rules, then verify on the equipment. Unencrypted links matter to privacy law only in the context of the data they carry.</p></div>
             </div>
-
-            <div className="p-4 rounded-xl bg-slate-900/50 border border-white/10 space-y-2">
-              <div className="font-bold text-sm text-emerald-300 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                3. Zero-Trust & Audit Integration
-              </div>
-              <p className="text-slate-400">
-                Combined with ResCure&apos;s Responsible AI and SecOps policies, each cable hop is audited for in-flight encryption (MACsec / IPsec / TLS) to guarantee DPDP and GDPR compliance before sensitive feature vectors reach inference nodes.
-              </p>
-            </div>
-          </div>
-        </div>
+          )}
+        </>
       )}
     </div>
   );

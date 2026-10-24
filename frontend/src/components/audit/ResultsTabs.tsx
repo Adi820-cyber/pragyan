@@ -7,15 +7,16 @@ import { BiasView } from "./BiasView";
 import { DriftView } from "./DriftView";
 import { ExplainView } from "./ExplainView";
 import { PrivacyView } from "./PrivacyView";
+import { GroundingView } from "./GroundingView";
+import { GovernanceView } from "./GovernanceView";
 import { StateBadge } from "@/components/ui/StateBadge";
-import { CATEGORY_LABEL } from "@/lib/format";
+import { CATEGORY_LABEL, CATEGORY_ORDER } from "@/lib/format";
 import type { Category, CheckResult, CoverageStatus, Finding, ResultState } from "@/lib/types";
 
-type Coverage = Record<Category, { status: CoverageStatus; counts: Partial<Record<ResultState, number>> }>;
+type Coverage = Partial<Record<Category, { status: CoverageStatus; counts: Partial<Record<ResultState, number>> }>>;
 
-const TABS = ["summary", "bias", "drift", "explainability", "privacy"] as const;
-type Tab = (typeof TABS)[number];
-const TAB_LABEL: Record<Tab, string> = { summary: "Summary", ...CATEGORY_LABEL } as Record<Tab, string>;
+type Tab = "summary" | Category;
+const TAB_LABEL: Record<string, string> = { summary: "Summary", ...CATEGORY_LABEL };
 
 export function ResultsTabs({
   systemId,
@@ -28,6 +29,7 @@ export function ResultsTabs({
   findings: Finding[];
   coverage: Coverage;
 }) {
+  const TABS: Tab[] = ["summary", ...CATEGORY_ORDER.filter((k) => coverage[k])];
   const [tab, setTab] = useState<Tab>("summary");
   const refs = useRef<Record<string, HTMLButtonElement | null>>({});
   const by = (c: Category) => results.filter((r) => r.category === c);
@@ -44,14 +46,18 @@ export function ResultsTabs({
 
   const notAssessed = results.filter((r) => r.state === "not_applicable" || r.state === "insufficient_evidence" || r.state === "error");
   const headline = results.filter(
-    (r) => r.state === "review_required" && ["demographic_parity", "selection_rate_ratio", "equalized_odds", "proxy_screen", "schema", "prediction_distribution", "performance", "minimisation"].includes(r.check_key),
+    (r) => r.state === "review_required" && ([
+"demographic_parity", "selection_rate_ratio", "equalized_odds", "proxy_screen", "schema", "prediction_distribution", "performance", "minimisation",
+      "refusal_gap", "response_length_gap", "score_gap", "groundedness", "unsupported_numbers", "citations", "personal_data_in_text",
+      "vendor_dependency", "vendor_register", "vendor_concentration", "human_oversight"].includes(r.check_key) ||
+      (r.check_key === "data_rights" && r.metric === "rights_procedure")),
   );
 
   return (
     <div className="space-y-4">
       <div role="tablist" aria-label="Audit results" className="flex flex-wrap gap-1 border-b border-white/10">
         {TABS.map((t, i) => {
-          const status = t === "summary" ? null : coverage[t as Category]?.status;
+          const status = t === "summary" ? null : coverage[t]?.status;
           return (
             <button
               key={t}
@@ -136,6 +142,8 @@ export function ResultsTabs({
         {tab === "bias" && <BiasView results={by("bias")} />}
         {tab === "drift" && <DriftView results={by("drift")} />}
         {tab === "explainability" && <ExplainView results={by("explainability")} />}
+        {tab === "grounding" && <GroundingView results={by("grounding")} />}
+        {tab === "governance" && <GovernanceView results={by("governance")} systemId={systemId} />}
         {tab === "privacy" && <PrivacyView results={by("privacy")} systemId={systemId} />}
       </div>
     </div>

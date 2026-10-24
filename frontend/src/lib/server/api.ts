@@ -63,9 +63,25 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
+const MAX_PAGES = 40;
+
+type Page<T> = { results?: T[]; next?: string | null };
+
+/** Returns every record, following pagination, so lists never silently stop at the first page. */
 export async function list<T>(path: string): Promise<T[]> {
-  const body = await api<{ results?: T[] } | T[]>(path);
-  return Array.isArray(body) ? body : (body.results ?? []);
+  const all: T[] = [];
+  let next: string | null = path;
+  for (let page = 0; next && page < MAX_PAGES; page++) {
+    const body: Page<T> | T[] = await api<Page<T> | T[]>(next);
+    if (Array.isArray(body)) return body;
+    all.push(...(body.results ?? []));
+    if (!body.next) return all;
+    // The API returns absolute URLs; keep only the path and query so the same session and host are used.
+    const target: URL = new URL(body.next);
+    next = `${target.pathname.replace(/^\/api\/v1/, "")}${target.search}`;
+  }
+  if (next) throw new ApiError(0, "This list is too long to load in full. Narrow it with a filter.");
+  return all;
 }
 
 export function getMe(): Promise<Me> {

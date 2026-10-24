@@ -1,11 +1,17 @@
 # Reskure AI Audit
 
-A lightweight, self-hostable toolkit for small AI teams. One audit run checks a tabular binary classifier for:
+A lightweight, self-hostable toolkit for small AI teams. It audits two kinds of system. **LLM / generative assistants are the default**; tabular classifiers are supported too.
 
-- **Bias**: outcome and error-rate gaps across groups you declare, with denominators and 95% intervals
-- **Drift**: reference vs current data and predictions (KS and Jensen-Shannon, schema, missingness, new categories)
-- **Explainability**: SHAP contributions for supported scikit-learn tree models
-- **DPDP / GDPR readiness**: personal-data scan (masked) plus an evidence-backed control checklist with independent review
+**LLM systems** (from a log of prompts and answers, as CSV or JSONL; no model or API calls needed):
+- **Bias**: refusal, answer-length and quality-score gaps between groups of users (for example by language)
+- **Drift**: change in what users ask and how the system answers between two periods
+- **Groundedness and traceability**: how much of an answer is found in its source, figures that appear nowhere in the source, citation coverage
+- **Privacy**: personal data inside prompts, answers and source text, including data the system surfaced on its own
+- **Oversight**: how often a person reviewed outputs and how often they changed them
+
+**Tabular classifiers**: group outcome and error-rate gaps, drift, SHAP explanations for supported tree models, personal-data scan.
+
+**Both**: vendor and dependency checks (contracts, training on your data, retention, cross-border transfers, exit plans), data-subject rights handling (procedure, owner, testing, response times), and an evidence-backed DPDP / GDPR control checklist with independent review.
 
 Findings get an owner, a due date and a reviewer sign-off. Each run is stored with its inputs, policy and library versions, and exports as a printable report. No paid APIs; runs on CPU.
 
@@ -20,7 +26,7 @@ cd backend
 copy .env.example .env          # DEBUG=True for local use
 uv sync
 uv run python manage.py migrate
-uv run python manage.py seed_ai_demo --password "choose-a-password"   # synthetic HireLens org + 3 users
+uv run python manage.py seed_ai_demo --password "choose-a-password"   # demo org, 3 users, 2 sample systems (see below)
 uv run python manage.py runserver 8000
 uv run python manage.py run_audit_worker                               # second terminal: executes queued audits
 ```
@@ -38,6 +44,13 @@ Demo users (all synthetic), same password: `founder@hirelens.example` (owner), `
 
 Tests: `cd backend; uv run python manage.py test apps`
 
+## Sample data
+
+- **COMPAS (real data).** ProPublica's recidivism data for Broward County, Florida (2013-2014): the scores a deployed risk tool gave to real defendants, the real outcomes two years later, race and sex, and real screening dates. Drift compares 2013 with 2014. The seed command downloads it on first use and caches it under `backend/private_media/sample_cache`; it is not stored in this repository because redistribution terms are not stated with the data. If the download is blocked, fetch `compas-scores-two-years.csv` from github.com/propublica/compas-analysis and run `seed_ai_demo --compas-file <path>`. Names, birth dates and case numbers are dropped on load. With `--offline` a small synthetic tabular sample is used instead.
+- **FinSum (synthetic LLM log).** A fictional assistant that summarises filings, with planted issues. It is generated from templates and is labelled as synthetic everywhere. Real production LLM logs that include source text, user groups and reviewer actions are not publicly available. If you have a real or public LLM log, upload it on a system's page.
+
+The app shows a "Real public data" notice on COMPAS views and a "Sample mode" notice on synthetic ones.
+
 ## Your own model
 
 Model files are never loaded by the server. Run the local tool in your environment and upload only the result bundle:
@@ -49,7 +62,11 @@ python tools/reskure_audit_cli/reskure_audit.py upload --bundle bundle.json --se
 
 ## What it does not do
 
-- Tabular binary classifiers only. No LLM, image, regression or multiclass auditing.
+- Tabular models must be binary classifiers. No image, regression or multi-class auditing; multi-class predictions are rejected with a message rather than collapsed into yes/no.
+- LLM checks measure what logs can show. They do not decide whether an answer is true. Groundedness is lexical overlap with the source: it tells you which answers to read, and an answer can be wrong while reusing the source's words. Answer correctness, toxicity and hallucination beyond unsupported figures are not scored. Quality scores you supply (from reviewers or a judge model) can carry their own bias.
+- Vendor and data-rights results come from what you declare. The tool cannot verify contracts, a vendor's training practices, or that a request procedure works.
+- Reports show the system, model, datasets and controls as they were when the audit completed. Findings and their review history are live workflow records.
+- Lists load every page of results, but nothing has been tested at more than a few hundred records.
 - Results are measurements for human review under a stated policy. It does not certify fairness, safety or legal compliance.
 - Thresholds are screening heuristics, not legal tests. Drift is a warning signal, not proof of worse performance.
 - Personal-data detection is heuristic and can miss data or flag false positives.

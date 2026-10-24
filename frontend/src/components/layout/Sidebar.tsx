@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, Boxes, ClipboardCheck, FileText, LayoutDashboard, ListChecks, ShieldCheck, Building2, Network, SlidersHorizontal } from "lucide-react";
+import { Activity, Boxes, ClipboardCheck, FileText, LayoutDashboard, ListChecks, ShieldCheck, Building2, Network, SlidersHorizontal, Cloud } from "lucide-react";
 
 const NAV_ITEMS = [
   { label: "Overview", href: "/", icon: LayoutDashboard },
   { label: "CISO Assistant", href: "/ciso-assistant", icon: SlidersHorizontal },
   { label: "AI Systems", href: "/systems", icon: Boxes },
+  { label: "Cloud Security", href: "/cloud-security", icon: Cloud },
   { label: "Audits", href: "/audits", icon: Activity },
   { label: "Packet Traversal", href: "/packet-traversal", icon: Network },
   { label: "Findings & Actions", href: "/findings", icon: ListChecks },

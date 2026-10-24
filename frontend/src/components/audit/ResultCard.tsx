@@ -22,9 +22,27 @@ export const METRIC_LABEL: Record<string, string> = {
   pii_column: "Personal-data indicator",
   pii_in_model_inputs: "Personal data in model inputs",
   rows_past_retention: "Rows past retention",
+  refusal_rate: "Refusal rate",
+  refusal_rate_gap: "Refusal-rate gap between groups",
+  refusal_rate_change: "Refusal-rate change",
+  response_length_ratio: "Answer-length ratio between groups",
+  score_gap_d: "Quality-score gap (standard deviations)",
+  mean_groundedness: "Average groundedness",
+  unsupported_number_rate: "Outputs with unsupported figures",
+  citation_share: "Outputs that cite a source",
+  pii_text_rows: "Personal data in text",
+  review_coverage: "Outputs reviewed by a person",
+  override_rate: "Reviewed outputs that were changed",
+  vendor_gaps: "Vendor gaps",
+  single_provider: "Single critical provider",
+  vendors_recorded: "Vendors recorded",
+  rights_procedure: "Rights procedure",
+  requests_on_time: "Requests closed on time",
 };
 
 const RATE_METRICS = new Set([
+  "refusal_rate", "refusal_rate_gap", "refusal_rate_change", "mean_groundedness", "unsupported_number_rate", "citation_share",
+  "pii_text_rows", "review_coverage", "override_rate", "requests_on_time",
   "demographic_parity_difference", "equalized_odds_difference", "selection_rate", "true_positive_rate",
   "false_positive_rate", "missing_share_change", "unseen_category_share", "favourable_rate_change", "accuracy_change",
 ]);
@@ -33,7 +51,7 @@ export function formatValue(r: Pick<CheckResult, "metric" | "value" | "unit">): 
   if (r.value === null) return "n/a";
   if (RATE_METRICS.has(r.metric)) return pct(r.value);
   if (r.metric === "additivity_max_error") return r.value.toExponential(1);
-  if (["pii_column", "rows_past_retention", "pii_in_model_inputs", "schema_changes"].includes(r.metric)) return String(Math.round(r.value));
+  if (["pii_column", "rows_past_retention", "pii_in_model_inputs", "schema_changes", "vendor_gaps", "vendors_recorded", "rights_procedure"].includes(r.metric)) return String(Math.round(r.value));
   return num(r.value);
 }
 

@@ -1,10 +1,102 @@
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
+
+from django.core.exceptions import ValidationError
+from django.db.models import Q
+
 from apps.network.models import NetworkDevice, DeviceInterface, CableLink, PacketInspectionRule
 
 logger = logging.getLogger(__name__)
 
 MAX_HOPS = 25
+
+
+def port_matches(rule_port: str, port: str) -> bool:
+    """Match a packet port against a rule: "*", "443", "23,3389", "8000-9000" or a mix like "22,8000-9000"."""
+    rule_port = (rule_port or "").strip()
+    if rule_port in ("", "*"):
+        return True
+    try:
+        wanted = int(str(port).strip())
+    except (TypeError, ValueError):
+        return False
+    for part in rule_port.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            if "-" in part:
+                low, high = (int(x) for x in part.split("-", 1))
+                if low <= wanted <= high:
+                    return True
+            elif int(part) == wanted:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _build_graph(tenant_id: str):
+    """Ports are nodes. Edges: cables, passive pass-through pairs, and forwarding between ports of one device."""
+    interfaces = {
+        str(i.id): i
+        for i in DeviceInterface.objects.select_related("device", "pass_through_counterpart").filter(tenant_id=tenant_id)
+    }
+    cables = list(
+        CableLink.objects.filter(tenant_id=tenant_id).select_related("termination_a__device", "termination_b__device")
+    )
+    adjacency: Dict[str, List[tuple]] = {key: [] for key in interfaces}
+    for cable in cables:
+        a, b = str(cable.termination_a_id), str(cable.termination_b_id)
+        if a in adjacency and b in adjacency:
+            adjacency[a].append((b, "cable", cable))
+            adjacency[b].append((a, "cable", cable))
+    by_device: Dict[str, List[str]] = {}
+    for key, iface in interfaces.items():
+        by_device.setdefault(str(iface.device_id), []).append(key)
+        if iface.is_pass_through and iface.pass_through_counterpart_id:
+            other = str(iface.pass_through_counterpart_id)
+            if other in adjacency:
+                adjacency[key].append((other, "pass", None))
+    for keys in by_device.values():
+        for a in keys:
+            for b in keys:
+                if a == b:
+                    continue
+                ia, ib = interfaces[a], interfaces[b]
+                if ia.is_pass_through or ib.is_pass_through:
+                    continue  # passive ports only connect to their counterpart
+                adjacency[a].append((b, "internal", None))
+    return interfaces, adjacency
+
+
+def _find_route(adjacency, src: str, dst: str, blocked_cables: set):
+    """Shortest route as a list of (from_port, to_port, kind, cable). None if there is no route."""
+    from collections import deque
+
+    previous = {src: None}
+    queue = deque([src])
+    while queue:
+        node = queue.popleft()
+        if node == dst:
+            break
+        for nxt, kind, cable in adjacency.get(node, []):
+            if nxt in previous:
+                continue
+            if kind == "cable" and cable.id in blocked_cables:
+                continue
+            previous[nxt] = (node, kind, cable)
+            queue.append(nxt)
+    if dst not in previous:
+        return None
+    route = []
+    node = dst
+    while previous[node] is not None:
+        prev, kind, cable = previous[node]
+        route.append((prev, node, kind, cable))
+        node = prev
+    route.reverse()
+    return route
 
 
 def trace_packet_path(
@@ -15,277 +107,158 @@ def trace_packet_path(
     destination_port: str = "443",
     packet_size_bytes: int = 1420,
     payload_label: str = "Customer Data Ingestion / Inference Request",
+    assume_severed_cables: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     """
-    NetBox-inspired recursive packet path tracer.
-    Traces the physical and logical route from a source interface to a destination interface.
-    Inspects cables, pass-through cross-connects, MTU bottlenecks, transit encryption,
-    and firewall inspection checkpoints.
+    Trace the physical and logical route of a packet between two ports.
+
+    The route is found first (shortest path over cables, passive cross-connects and forwarding inside
+    devices). It is then walked hop by hop, checking device status, firewall rules, the cable, MTU and
+    encryption. Cables listed in `assume_severed_cables` (ids or labels) are treated as cut for this
+    trace only; nothing is saved.
     """
+    assumed_cut = {str(c) for c in (assume_severed_cables or [])}
     try:
-        source_iface = DeviceInterface.objects.select_related("device").get(
-            id=source_interface_id, tenant_id=tenant_id
-        )
-        dest_iface = DeviceInterface.objects.select_related("device").get(
-            id=destination_interface_id, tenant_id=tenant_id
-        )
-    except DeviceInterface.DoesNotExist:
+        source_iface = DeviceInterface.objects.select_related("device").get(id=source_interface_id, tenant_id=tenant_id)
+        dest_iface = DeviceInterface.objects.select_related("device").get(id=destination_interface_id, tenant_id=tenant_id)
+    except (DeviceInterface.DoesNotExist, ValidationError, ValueError):
+        return {"status": "ERROR", "message": "Source or destination network interface not found.", "hops": []}
+
+    interfaces, adjacency = _build_graph(tenant_id)
+    src_key, dst_key = str(source_iface.id), str(dest_iface.id)
+
+    def is_cut(cable) -> bool:
+        return cable.status == "SEVERED" or str(cable.id) in assumed_cut or cable.label in assumed_cut
+
+    cut_ids = {c.id for edges in adjacency.values() for (_, kind, c) in edges if kind == "cable" and is_cut(c)}
+    route = _find_route(adjacency, src_key, dst_key, cut_ids)
+    if route is None:
+        # No working route: find the physical one so we can say where it breaks.
+        route = _find_route(adjacency, src_key, dst_key, set())
+
+    def endpoint(iface) -> Dict[str, Any]:
+        return {"device": iface.device.name, "role": iface.device.role, "interface": iface.name,
+                "ip": iface.ip_address or iface.device.primary_ip}
+
+    def finish(status: str, reason: str, hops: List[Dict[str, Any]], latency: float, min_mtu: int, unencrypted: int):
+        compliance = "COMPLIANT"
+        if unencrypted > 0:
+            compliance = "WARNING_UNENCRYPTED_TRANSIT"
+        if status in ("BLOCKED_FIREWALL", "SEVERED_CABLE", "DROPPED", "DISCONNECTED", "HOP_LIMIT_EXCEEDED"):
+            compliance = "FAILED_DELIVERY"
         return {
-            "status": "ERROR",
-            "message": "Source or destination network interface not found.",
-            "hops": [],
+            "status": status, "termination_reason": reason, "source": endpoint(source_iface),
+            "destination": endpoint(dest_iface), "protocol": protocol, "destination_port": destination_port,
+            "packet_size_bytes": packet_size_bytes, "payload_label": payload_label, "total_hops": len(hops),
+            "total_latency_ms": round(latency, 2), "bottleneck_mtu": min_mtu, "unencrypted_hops": unencrypted,
+            "compliance_score": compliance, "hops": hops,
         }
 
+    if route is None:
+        hop = {
+            "hop_number": 1, "device_name": source_iface.device.name, "device_role": source_iface.device.role,
+            "interface_name": source_iface.name, "ip_address": source_iface.ip_address or source_iface.device.primary_ip or "N/A",
+            "cable_label": "UNTERMINATED", "cable_type": "Disconnected", "hop_latency_ms": 0.0, "cumulative_latency_ms": 0.0,
+            "is_encrypted": False, "mtu": source_iface.mtu, "action": "UNCONNECTED_PORT",
+            "notes": f"No cabled path exists from {source_iface.device.name} to {dest_iface.device.name}.",
+        }
+        return finish("DISCONNECTED", hop["notes"], [hop], 0.0, source_iface.mtu, 0)
+
+    # Group the route into device visits: arrive on one port, forward internally, leave on a cable (or finish).
+    visits: List[Dict[str, Any]] = []
+    current = {"ingress": interfaces[src_key], "egress": interfaces[src_key], "passive": False, "cable": None, "next": None}
+    for from_key, to_key, kind, cable in route:
+        to_iface = interfaces[to_key]
+        if kind == "cable":
+            current["cable"], current["next"] = cable, to_iface
+            visits.append(current)
+            current = {"ingress": to_iface, "egress": to_iface, "passive": False, "cable": None, "next": None}
+        else:
+            current["egress"] = to_iface
+            current["passive"] = current["passive"] or kind == "pass"
+    visits.append(current)
+
     hops: List[Dict[str, Any]] = []
-    visited_interfaces = set()
-    current_iface = source_iface
-    cumulative_latency_ms = 0.0
-    traversal_status = "DELIVERED"
-    termination_reason = "Packet successfully reached destination interface."
-    min_mtu = current_iface.mtu
-    unencrypted_hops = 0
-    hop_index = 1
+    latency, unencrypted = 0.0, 0
+    min_mtu = min(source_iface.mtu, dest_iface.mtu)
+    status, reason = "DELIVERED", "Packet successfully reached destination interface."
 
-    while hop_index <= MAX_HOPS:
-        visited_interfaces.add(str(current_iface.id))
+    def base_hop(n: int, visit: Dict[str, Any]) -> Dict[str, Any]:
+        ingress, egress = visit["ingress"], visit["egress"]
+        name = ingress.name if ingress.id == egress.id else f"{ingress.name} ➔ {egress.name}"
+        return {
+            "hop_number": n, "device_name": ingress.device.name, "device_role": ingress.device.role, "interface_name": name,
+            "ip_address": "Passive Pass-Through" if visit["passive"] else (ingress.ip_address or ingress.device.primary_ip or "N/A"),
+            "mtu": min(ingress.mtu, egress.mtu),
+        }
 
-        if current_iface.mtu < min_mtu:
-            min_mtu = current_iface.mtu
-
-        # Check MTU limit
-        mtu_issue = None
-        if packet_size_bytes > current_iface.mtu:
-            mtu_issue = f"Packet size ({packet_size_bytes}B) exceeds MTU ({current_iface.mtu}B) - fragmented"
-
-        # Check Device Operational Status & Firewall
-        device = current_iface.device
-        device_inspection = "PERMIT"
-        device_note = "Interface forwarded frame"
+    for index, visit in enumerate(visits, start=1):
+        if index > MAX_HOPS:
+            status, reason = "HOP_LIMIT_EXCEEDED", f"Exceeded maximum hop limit ({MAX_HOPS} hops)."
+            break
+        device = visit["ingress"].device
+        hop = base_hop(index, visit)
+        min_mtu = min(min_mtu, hop["mtu"])
 
         if device.status == "OFFLINE":
-            traversal_status = "DROPPED"
-            termination_reason = f"Device '{device.name}' is OFFLINE. Packet dropped."
-            hops.append({
-                "hop_number": hop_index,
-                "device_name": device.name,
-                "device_role": device.role,
-                "interface_name": current_iface.name,
-                "ip_address": current_iface.ip_address or device.primary_ip or "N/A",
-                "cable_label": "None",
-                "cable_type": "Internal",
-                "hop_latency_ms": 0.0,
-                "cumulative_latency_ms": round(cumulative_latency_ms, 2),
-                "is_encrypted": True,
-                "mtu": current_iface.mtu,
-                "action": "DROP_OFFLINE",
-                "notes": termination_reason,
-            })
+            status, reason = "DROPPED", f"Device '{device.name}' is OFFLINE. Packet dropped."
+            hops.append({**hop, "cable_label": "None", "cable_type": "Internal", "hop_latency_ms": 0.0,
+                         "cumulative_latency_ms": round(latency, 2), "is_encrypted": True, "action": "DROP_OFFLINE", "notes": reason})
             break
 
-        # Check Firewall rules on current device
-        rules = PacketInspectionRule.objects.filter(
-            tenant_id=tenant_id, device=device
-        ).order_by("priority")
-        
-        rule_blocked = False
-        for rule in rules:
-            proto_match = rule.protocol in ("ANY", protocol)
-            port_match = rule.destination_port in ("*", destination_port)
-            if proto_match and port_match:
+        inspection, note = "PERMIT", "Interface forwarded frame"
+        blocked = False
+        for rule in PacketInspectionRule.objects.filter(tenant_id=tenant_id, device=device).order_by("priority"):
+            if rule.protocol in ("ANY", protocol) and port_matches(rule.destination_port, destination_port):
                 if rule.action == "DENY_DROP":
-                    device_inspection = "DENIED"
-                    device_note = f"Blocked by rule '{rule.rule_name}': {rule.notes or 'Access Forbidden'}"
-                    rule_blocked = True
+                    inspection, blocked = "DENIED", True
+                    note = f"Blocked by rule '{rule.rule_name}': {rule.notes or 'Access Forbidden'}"
                     break
-                elif rule.action == "INSPECT_PASS":
-                    device_inspection = "INSPECTED"
-                    device_note = f"Verified by rule '{rule.rule_name}' (Deep Packet Inspection passed)"
+                if rule.action == "INSPECT_PASS":
+                    inspection, note = "INSPECTED", f"Verified by rule '{rule.rule_name}' (Deep Packet Inspection passed)"
                     break
-
-        if rule_blocked:
-            traversal_status = "BLOCKED_FIREWALL"
-            termination_reason = f"Security filter on {device.name} dropped packet."
-            hops.append({
-                "hop_number": hop_index,
-                "device_name": device.name,
-                "device_role": device.role,
-                "interface_name": current_iface.name,
-                "ip_address": current_iface.ip_address or device.primary_ip or "N/A",
-                "cable_label": "None",
-                "cable_type": "Internal",
-                "hop_latency_ms": 0.0,
-                "cumulative_latency_ms": round(cumulative_latency_ms, 2),
-                "is_encrypted": True,
-                "mtu": current_iface.mtu,
-                "action": "FIREWALL_DROP",
-                "notes": device_note,
-            })
+        if blocked:
+            status, reason = "BLOCKED_FIREWALL", f"Security filter on {device.name} dropped packet."
+            hops.append({**hop, "cable_label": "None", "cable_type": "Internal", "hop_latency_ms": 0.0,
+                         "cumulative_latency_ms": round(latency, 2), "is_encrypted": True, "action": "FIREWALL_DROP", "notes": note})
             break
 
-        # Did we reach destination interface?
-        if current_iface.id == dest_iface.id:
-            hops.append({
-                "hop_number": hop_index,
-                "device_name": device.name,
-                "device_role": device.role,
-                "interface_name": current_iface.name,
-                "ip_address": current_iface.ip_address or device.primary_ip or "N/A",
-                "cable_label": "Destination Termination",
-                "cable_type": "Endpoint",
-                "hop_latency_ms": 0.05,
-                "cumulative_latency_ms": round(cumulative_latency_ms + 0.05, 2),
-                "is_encrypted": True,
-                "mtu": current_iface.mtu,
-                "action": "DELIVERED",
-                "notes": f"Destination socket reached ({payload_label})",
-            })
-            cumulative_latency_ms += 0.05
+        cable = visit["cable"]
+        if cable is None:  # last visit: the destination
+            hops.append({**hop, "cable_label": "Destination Termination", "cable_type": "Endpoint", "hop_latency_ms": 0.05,
+                         "cumulative_latency_ms": round(latency + 0.05, 2), "is_encrypted": True, "action": "DELIVERED",
+                         "notes": f"Destination socket reached ({payload_label})"})
+            latency += 0.05
             break
 
-        # Handle Pass-Through Ports (e.g. Front port to Rear port on NetBox patch panels)
-        if current_iface.is_pass_through and current_iface.pass_through_counterpart:
-            counterpart = current_iface.pass_through_counterpart
-            hops.append({
-                "hop_number": hop_index,
-                "device_name": device.name,
-                "device_role": device.role,
-                "interface_name": f"{current_iface.name} ➔ {counterpart.name}",
-                "ip_address": "Passive Pass-Through",
-                "cable_label": "Internal Patch Cross-Connect",
-                "cable_type": "Passive Pass-Through",
-                "hop_latency_ms": 0.02,
-                "cumulative_latency_ms": round(cumulative_latency_ms + 0.02, 2),
-                "is_encrypted": True,
-                "mtu": current_iface.mtu,
-                "action": "PASS_THROUGH",
-                "notes": f"Cross-connected internally on {device.name}",
-            })
-            cumulative_latency_ms += 0.02
-            current_iface = counterpart
-            hop_index += 1
-            continue
-
-        # Find connected cable connected to this interface
-        cable = CableLink.objects.filter(
-            tenant_id=tenant_id
-        ).filter(
-            models.Q(termination_a=current_iface) | models.Q(termination_b=current_iface)
-        ).select_related("termination_a__device", "termination_b__device").first()
-
-        if not cable:
-            traversal_status = "DISCONNECTED"
-            termination_reason = f"No connected cable found leaving {device.name}:{current_iface.name}."
-            hops.append({
-                "hop_number": hop_index,
-                "device_name": device.name,
-                "device_role": device.role,
-                "interface_name": current_iface.name,
-                "ip_address": current_iface.ip_address or device.primary_ip or "N/A",
-                "cable_label": "UNTERMINATED",
-                "cable_type": "Disconnected",
-                "hop_latency_ms": 0.0,
-                "cumulative_latency_ms": round(cumulative_latency_ms, 2),
-                "is_encrypted": False,
-                "mtu": current_iface.mtu,
-                "action": "UNCONNECTED_PORT",
-                "notes": termination_reason,
-            })
+        if is_cut(cable):
+            assumed = cable.status != "SEVERED"
+            status = "SEVERED_CABLE"
+            reason = (f"Cable {cable.label} is assumed cut for this what-if trace. No data was changed."
+                      if assumed else f"Cable {cable.label} is SEVERED/CUT. Physical signal interrupted.")
+            hops.append({**hop, "cable_label": f"{cable.label} [{'ASSUMED CUT' if assumed else 'SEVERED'}]",
+                         "cable_type": cable.get_cable_type_display(), "hop_latency_ms": 0.0, "cumulative_latency_ms": round(latency, 2),
+                         "is_encrypted": cable.is_encrypted, "action": "CABLE_SEVERED", "notes": reason})
             break
 
-        if cable.status == "SEVERED":
-            traversal_status = "SEVERED_CABLE"
-            termination_reason = f"Cable {cable.label} is SEVERED/CUT. Physical signal interrupted."
-            hops.append({
-                "hop_number": hop_index,
-                "device_name": device.name,
-                "device_role": device.role,
-                "interface_name": current_iface.name,
-                "ip_address": current_iface.ip_address or device.primary_ip or "N/A",
-                "cable_label": cable.label,
-                "cable_type": cable.get_cable_type_display(),
-                "hop_latency_ms": 0.0,
-                "cumulative_latency_ms": round(cumulative_latency_ms, 2),
-                "is_encrypted": cable.is_encrypted,
-                "mtu": current_iface.mtu,
-                "action": "CABLE_SEVERED",
-                "notes": termination_reason,
-            })
-            break
-
-        # Move across cable to the peer interface
-        next_iface = cable.termination_b if cable.termination_a_id == current_iface.id else cable.termination_a
-        hop_latency = cable.latency_ms
-        if cable.status == "DEGRADED":
-            hop_latency *= 4.5  # High jitter / degradation simulation
-
-        cumulative_latency_ms += hop_latency
+        mtu_issue = None
+        if packet_size_bytes > hop["mtu"]:
+            mtu_issue = f"Packet size ({packet_size_bytes}B) exceeds MTU ({hop['mtu']}B) - fragmented"
+        hop_latency = cable.latency_ms * (4.5 if cable.status == "DEGRADED" else 1.0)
+        latency += hop_latency
         if not cable.is_encrypted:
-            unencrypted_hops += 1
-
+            unencrypted += 1
+        if visit["passive"]:
+            note = f"Cross-connected internally on {device.name}"
+        elif note == "Interface forwarded frame":
+            note = f"Traversed {cable.label} ({cable.get_cable_type_display()}) to {visit['next'].device.name}"
         hops.append({
-            "hop_number": hop_index,
-            "device_name": device.name,
-            "device_role": device.role,
-            "interface_name": current_iface.name,
-            "ip_address": current_iface.ip_address or device.primary_ip or "N/A",
-            "cable_label": cable.label,
-            "cable_type": cable.get_cable_type_display(),
-            "bandwidth_gbps": cable.bandwidth_gbps,
-            "hop_latency_ms": round(hop_latency, 2),
-            "cumulative_latency_ms": round(cumulative_latency_ms, 2),
-            "is_encrypted": cable.is_encrypted,
-            "mtu": current_iface.mtu,
-            "mtu_issue": mtu_issue,
-            "action": device_inspection,
-            "notes": device_note if device_note != "Interface forwarded frame" else f"Traversed {cable.label} ({cable.get_cable_type_display()}) to {next_iface.device.name}",
+            **hop, "cable_label": cable.label, "cable_type": cable.get_cable_type_display(), "bandwidth_gbps": cable.bandwidth_gbps,
+            "hop_latency_ms": round(hop_latency, 2), "cumulative_latency_ms": round(latency, 2), "is_encrypted": cable.is_encrypted,
+            "mtu_issue": mtu_issue, "action": "PASS_THROUGH" if visit["passive"] else inspection, "notes": note,
         })
 
-        if str(next_iface.id) in visited_interfaces:
-            traversal_status = "ROUTING_LOOP"
-            termination_reason = f"Routing loop detected returning to {next_iface.device.name}:{next_iface.name}."
-            break
-
-        current_iface = next_iface
-        hop_index += 1
-
-    if hop_index > MAX_HOPS and traversal_status == "DELIVERED":
-        traversal_status = "HOP_LIMIT_EXCEEDED"
-        termination_reason = f"Exceeded maximum hop limit ({MAX_HOPS} hops)."
-
-    # Security & Compliance rating
-    compliance_score = "COMPLIANT"
-    if unencrypted_hops > 0:
-        compliance_score = "WARNING_UNENCRYPTED_TRANSIT"
-    if traversal_status in ("BLOCKED_FIREWALL", "SEVERED_CABLE", "DROPPED"):
-        compliance_score = "FAILED_DELIVERY"
-
-    return {
-        "status": traversal_status,
-        "termination_reason": termination_reason,
-        "source": {
-            "device": source_iface.device.name,
-            "role": source_iface.device.role,
-            "interface": source_iface.name,
-            "ip": source_iface.ip_address or source_iface.device.primary_ip,
-        },
-        "destination": {
-            "device": dest_iface.device.name,
-            "role": dest_iface.device.role,
-            "interface": dest_iface.name,
-            "ip": dest_iface.ip_address or dest_iface.device.primary_ip,
-        },
-        "protocol": protocol,
-        "destination_port": destination_port,
-        "packet_size_bytes": packet_size_bytes,
-        "payload_label": payload_label,
-        "total_hops": len(hops),
-        "total_latency_ms": round(cumulative_latency_ms, 2),
-        "bottleneck_mtu": min_mtu,
-        "unencrypted_hops": unencrypted_hops,
-        "compliance_score": compliance_score,
-        "hops": hops,
-    }
-
+    return finish(status, reason, hops, latency, min_mtu, unencrypted)
 
 def seed_demo_network(tenant) -> Dict[str, Any]:
     """

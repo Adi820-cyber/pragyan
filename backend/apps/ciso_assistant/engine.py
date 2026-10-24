@@ -7,22 +7,51 @@ from apps.ciso_assistant.catalog import (
     SAMPLE_RISKS,
 )
 
-# In-memory working copy per process with persistence to Django models when active
-_TENANT_CONTROLS_CACHE: Dict[str, List[Dict[str, Any]]] = {}
-_TENANT_RISKS_CACHE: Dict[str, List[Dict[str, Any]]] = {}
+VALID_STATUSES = ("NOT_STARTED", "IN_PROGRESS", "IMPLEMENTED")
+RISK_CATEGORIES = ("CYBERSECURITY", "PRIVACY", "COMPLIANCE", "OPERATIONAL", "THIRD_PARTY", "AI")
+RISK_STATUSES = ("IDENTIFIED", "ASSESSED", "TREATING", "ACCEPTED", "CLOSED")
+TREATMENTS = ("MITIGATE", "ACCEPT", "TRANSFER", "AVOID")
+
+
+class CisoValidationError(ValueError):
+    """Raised when a payload is not acceptable; the view turns it into HTTP 400."""
+
+
+# Reads work on the stored per-tenant copy when one exists, else on a throwaway copy of the
+# shipped baseline. Nothing is written until a user changes something.
+def _state(tenant_id: str):
+    from apps.ciso_assistant.models import CisoTenantState
+
+    return CisoTenantState.objects.filter(tenant_id=tenant_id).first()
 
 
 def _get_controls_for_tenant(tenant_id: str) -> List[Dict[str, Any]]:
-    if tenant_id not in _TENANT_CONTROLS_CACHE:
-        _TENANT_CONTROLS_CACHE[tenant_id] = copy.deepcopy(STANDARD_CONTROLS)
-    return _TENANT_CONTROLS_CACHE[tenant_id]
+    row = _state(tenant_id)
+    return row.controls if row and row.controls else copy.deepcopy(STANDARD_CONTROLS)
 
 
 def _get_risks_for_tenant(tenant_id: str) -> List[Dict[str, Any]]:
-    if tenant_id not in _TENANT_RISKS_CACHE:
-        _TENANT_RISKS_CACHE[tenant_id] = copy.deepcopy(SAMPLE_RISKS)
-    return _TENANT_RISKS_CACHE[tenant_id]
+    row = _state(tenant_id)
+    return row.risks if row else copy.deepcopy(SAMPLE_RISKS)
 
+
+def _save(tenant_id: str, controls: List[Dict[str, Any]], risks: List[Dict[str, Any]]) -> None:
+    from apps.ciso_assistant.models import CisoTenantState
+
+    CisoTenantState.objects.update_or_create(
+        tenant_id=tenant_id, defaults={"controls": controls, "risks": risks}
+    )
+
+
+def reset_tenant_state(tenant_id: str) -> bool:
+    from apps.ciso_assistant.models import CisoTenantState
+
+    deleted, _ = CisoTenantState.objects.filter(tenant_id=tenant_id).delete()
+    return bool(deleted)
+
+
+def has_stored_state(tenant_id: str) -> bool:
+    return _state(tenant_id) is not None
 
 def get_ciso_overview(tenant_id: str) -> Dict[str, Any]:
     """
@@ -110,6 +139,8 @@ def get_ciso_overview(tenant_id: str) -> Dict[str, Any]:
         "medium_risks": med_count,
         "low_risks": low_count,
         "open_gaps_count": len(open_gaps),
+        "is_baseline": not has_stored_state(tenant_id),
+        "baseline_note": "Control statuses and risks shown are the shipped starter baseline, not an assessment of your organisation, until you change them.",
         "frameworks": framework_summaries,
         "inherent_matrix_5x5": inherent_matrix,
         "residual_matrix_5x5": residual_matrix,
@@ -136,6 +167,8 @@ def update_control_status(
     If sync_crosswalks is True ('Assess Once, Comply with Many'), updates all
     equivalent controls across other frameworks sharing the same crosswalk_tag!
     """
+    if new_status not in VALID_STATUSES:
+        raise CisoValidationError(f"status must be one of {", ".join(VALID_STATUSES)}.")
     controls = _get_controls_for_tenant(tenant_id)
     target_control = next((c for c in controls if c["code"] == control_code), None)
     if not target_control:
@@ -151,6 +184,7 @@ def update_control_status(
             if c["crosswalk_tag"] == tag and c["code"] != control_code:
                 c["status"] = new_status
                 synced_controls.append(f"{c['framework_code']}:{c['code']}")
+    _save(tenant_id, controls, _get_risks_for_tenant(tenant_id))
 
     return {
         "success": True,
@@ -200,35 +234,72 @@ def get_gap_analysis(tenant_id: str) -> List[Dict[str, Any]]:
     return gaps
 
 
+def _rating(data: Dict[str, Any], key: str, default: int) -> int:
+    value = data.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise CisoValidationError(f"{key} must be an integer from 1 to 5.")
+    try:
+        number = int(value)
+    except ValueError:
+        raise CisoValidationError(f"{key} must be an integer from 1 to 5.")
+    if not 1 <= number <= 5:
+        raise CisoValidationError(f"{key} must be an integer from 1 to 5.")
+    return number
+
+
+def _severity(score: int) -> str:
+    return "CRITICAL" if score >= 20 else "HIGH" if score >= 13 else "MEDIUM" if score >= 6 else "LOW"
+
+
+def _choice(data: Dict[str, Any], key: str, allowed, default: str) -> str:
+    value = data.get(key, default)
+    if value not in allowed:
+        raise CisoValidationError(f"{key} must be one of {', '.join(allowed)}.")
+    return value
+
+
+def _text(data: Dict[str, Any], key: str, limit: int, default: str = "") -> str:
+    value = data.get(key, default)
+    if not isinstance(value, str):
+        raise CisoValidationError(f"{key} must be text.")
+    value = value.strip()
+    if len(value) > limit:
+        raise CisoValidationError(f"{key} must be at most {limit} characters.")
+    return value
+
+
 def add_custom_risk(tenant_id: str, risk_data: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(risk_data, dict) and not hasattr(risk_data, "get"):
+        raise CisoValidationError("A JSON object is required.")
+    controls = _get_controls_for_tenant(tenant_id)
     risks = _get_risks_for_tenant(tenant_id)
-    identifier = risk_data.get("identifier") or f"RSK-CUSTOM-{len(risks) + 1:03d}"
-    il = int(risk_data.get("inherent_likelihood", 3))
-    ii = int(risk_data.get("inherent_impact", 3))
-    iscore = il * ii
-    isev = "CRITICAL" if iscore >= 20 else "HIGH" if iscore >= 13 else "MEDIUM" if iscore >= 6 else "LOW"
-
-    rl = int(risk_data.get("residual_likelihood", max(1, il - 1)))
-    ri = int(risk_data.get("residual_impact", max(1, ii - 1)))
-    rscore = rl * ri
-    rsev = "CRITICAL" if rscore >= 20 else "HIGH" if rscore >= 13 else "MEDIUM" if rscore >= 6 else "LOW"
-
+    title = _text(risk_data, "title", 200)
+    if not title:
+        raise CisoValidationError("title is required.")
+    il = _rating(risk_data, "inherent_likelihood", 3)
+    ii = _rating(risk_data, "inherent_impact", 3)
+    rl = _rating(risk_data, "residual_likelihood", max(1, il - 1))
+    ri = _rating(risk_data, "residual_impact", max(1, ii - 1))
+    identifier = _text(risk_data, "identifier", 40) or f"RSK-CUSTOM-{len(risks) + 1:03d}"
+    if any(r["identifier"] == identifier for r in risks):
+        raise CisoValidationError(f"A risk with identifier {identifier} already exists.")
     new_risk = {
         "identifier": identifier,
-        "title": risk_data.get("title", "New Custom Risk"),
-        "category": risk_data.get("category", "CYBERSECURITY"),
-        "status": risk_data.get("status", "IDENTIFIED"),
+        "title": title,
+        "category": _choice(risk_data, "category", RISK_CATEGORIES, "CYBERSECURITY"),
+        "status": _choice(risk_data, "status", RISK_STATUSES, "IDENTIFIED"),
         "inherent_likelihood": il,
         "inherent_impact": ii,
-        "inherent_score": iscore,
-        "inherent_severity": isev,
+        "inherent_score": il * ii,
+        "inherent_severity": _severity(il * ii),
         "residual_likelihood": rl,
         "residual_impact": ri,
-        "residual_score": rscore,
-        "residual_severity": rsev,
-        "treatment_strategy": risk_data.get("treatment_strategy", "MITIGATE"),
-        "treatment_plan": risk_data.get("treatment_plan", ""),
-        "mitigating_control": risk_data.get("mitigating_control", "CTRL-IAM-MFA"),
+        "residual_score": rl * ri,
+        "residual_severity": _severity(rl * ri),
+        "treatment_strategy": _choice(risk_data, "treatment_strategy", TREATMENTS, "MITIGATE"),
+        "treatment_plan": _text(risk_data, "treatment_plan", 2000),
+        "mitigating_control": _text(risk_data, "mitigating_control", 80),
     }
     risks.insert(0, new_risk)
+    _save(tenant_id, controls, risks)
     return new_risk

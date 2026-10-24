@@ -5,9 +5,12 @@ import { pct } from "@/lib/format";
 import { ResultCard } from "./ResultCard";
 import type { CheckResult } from "@/lib/types";
 
-const AGGREGATE_KEYS = ["demographic_parity", "selection_rate_ratio", "equalized_odds"];
+const AGGREGATE_KEYS = ["demographic_parity", "selection_rate_ratio", "equalized_odds", "refusal_gap", "response_length_gap", "score_gap"];
 
 export function BiasView({ results }: { results: CheckResult[] }) {
+  const isLlm = results.some((r) => r.check_key === "group_refusal_rate");
+  const rateKey = isLlm ? "group_refusal_rate" : "group_selection_rate";
+  const rateLabel = isLlm ? "Refusal rate" : "Favourable-outcome rate";
   const groupCols = Array.from(new Set(results.map((r) => r.detail.group_column as string | undefined).filter(Boolean))) as string[];
   const orphan = results.filter((r) => !r.detail.group_column && !AGGREGATE_KEYS.includes(r.check_key));
   const general = results.filter((r) => !r.detail.group_column && r.subject === "" && r.state === "not_applicable");
@@ -19,7 +22,7 @@ export function BiasView({ results }: { results: CheckResult[] }) {
       {general.map((r) => <ResultCard key={r.id} r={r} />)}
       {groupCols.map((gcol) => {
         const mine = results.filter((r) => r.detail.group_column === gcol);
-        const rows = mine.filter((r) => r.check_key === "group_selection_rate");
+        const rows = mine.filter((r) => r.check_key === rateKey);
         const tpr = mine.filter((r) => r.check_key === "group_true_positive_rate");
         const fpr = mine.filter((r) => r.check_key === "group_false_positive_rate");
         const aggregates = results.filter((r) => AGGREGATE_KEYS.includes(r.check_key) && r.subject === gcol);
@@ -39,15 +42,15 @@ export function BiasView({ results }: { results: CheckResult[] }) {
             <div className="grid lg:grid-cols-3 gap-4">{aggregates.map((r) => <ResultCard key={r.id} r={r} />)}</div>
 
             <div className="glass-panel p-4">
-              <h3 className="text-xs font-semibold text-slate-300 mb-2">Favourable-outcome rate by group (bars show 95% intervals)</h3>
-              <div style={{ height: 240 }} role="img" aria-label={`Bar chart of favourable-outcome rate by ${gcol} group. The same numbers are in the table below.`}>
+              <h3 className="text-xs font-semibold text-slate-300 mb-2">{rateLabel} by group (bars show 95% intervals)</h3>
+              <div style={{ height: 240 }} role="img" aria-label={`Bar chart of ${rateLabel.toLowerCase()} by ${gcol} group. The same numbers are in the table below.`}>
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={chart} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                     <XAxis dataKey="group" stroke="#94a3b8" fontSize={12} />
                     <YAxis stroke="#94a3b8" fontSize={12} tickFormatter={(v) => pct(v, 0)} domain={[0, "auto"]} />
                     <Tooltip formatter={(v) => pct(Number(v))} contentStyle={{ background: "#0f172a", border: "1px solid #334155", fontSize: 12 }} />
-                    <Bar dataKey="rate" name="Favourable-outcome rate" fill="#0ea5e9">
+                    <Bar dataKey="rate" name={rateLabel} fill="#0ea5e9">
                       <ErrorBar dataKey="err" stroke="#e2e8f0" width={4} />
                     </Bar>
                   </BarChart>
@@ -55,7 +58,7 @@ export function BiasView({ results }: { results: CheckResult[] }) {
               </div>
             </div>
 
-            {(tpr.length > 0 || fpr.length > 0) && (
+            {!isLlm && (tpr.length > 0 || fpr.length > 0) && (
               <div className="glass-panel p-4">
                 <h3 className="text-xs font-semibold text-slate-300 mb-2">Error rates by group</h3>
                 <div style={{ height: 220 }} role="img" aria-label={`Bar chart of true and false positive rates by ${gcol} group. The same numbers are in the table below.`}>
@@ -84,9 +87,9 @@ export function BiasView({ results }: { results: CheckResult[] }) {
                   <tr className="text-left text-slate-400 border-b border-white/10">
                     <th scope="col" className="p-2 font-medium">Group</th>
                     <th scope="col" className="p-2 font-medium">Rows</th>
-                    <th scope="col" className="p-2 font-medium">Favourable outcome</th>
-                    <th scope="col" className="p-2 font-medium">True positive rate</th>
-                    <th scope="col" className="p-2 font-medium">False positive rate</th>
+                    <th scope="col" className="p-2 font-medium">{isLlm ? "Refused or deflected" : "Favourable outcome"}</th>
+                    {!isLlm && <th scope="col" className="p-2 font-medium">True positive rate</th>}
+                    {!isLlm && <th scope="col" className="p-2 font-medium">False positive rate</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -98,8 +101,8 @@ export function BiasView({ results }: { results: CheckResult[] }) {
                         <th scope="row" className="p-2 text-left font-medium">{name(r)}</th>
                         <td className="p-2">{r.support_n?.toLocaleString()}{r.state === "insufficient_evidence" && <span className="text-amber-300"> (too small)</span>}</td>
                         <td className="p-2">{pct(r.value)}</td>
-                        <td className="p-2">{t?.value != null ? `${pct(t.value)} (n=${t.support_n})` : "not assessed"}</td>
-                        <td className="p-2">{f?.value != null ? `${pct(f.value)} (n=${f.support_n})` : "not assessed"}</td>
+                        {!isLlm && <td className="p-2">{t?.value != null ? `${pct(t.value)} (n=${t.support_n})` : "not assessed"}</td>}
+                        {!isLlm && <td className="p-2">{f?.value != null ? `${pct(f.value)} (n=${f.support_n})` : "not assessed"}</td>}
                       </tr>
                     );
                   })}

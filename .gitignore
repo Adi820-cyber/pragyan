@@ -57,3 +57,7 @@ out/
 *.swo
 .DS_Store
 Thumbs.db
+
+# Local run state
+.run/
+frontend/.env.local

@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Dormant legacy GRC screens, excluded from the product and the type-check.
+    "src/legacy/**",
+    "src/components/dashboard/**",
   ]),
 ]);
 

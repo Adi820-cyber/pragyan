@@ -95,7 +95,8 @@ export interface AccessDecisionLog {
 // ---------------------------------------------------------------------------
 // Responsible AI audit
 // ---------------------------------------------------------------------------
-export type Category = "bias" | "drift" | "explainability" | "privacy";
+export type Category = "bias" | "drift" | "explainability" | "grounding" | "privacy" | "governance";
+export type SystemType = "llm" | "tabular";
 export type ResultState = "no_alert" | "review_required" | "insufficient_evidence" | "not_applicable" | "error";
 export type CoverageStatus = "assessed" | "review_required" | "not_assessed" | "error";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
@@ -141,6 +142,8 @@ export interface AISystem {
   automated_decision: boolean;
   processes_children_data: boolean;
   is_significant_data_fiduciary: boolean;
+  system_type: SystemType;
+  requires_citations: boolean;
   status: string;
   latest_run: { id: string; status: RunStatus; finished_at: string | null; model_version: string } | null;
   open_findings: number;
@@ -151,9 +154,12 @@ export interface ModelVersion {
   system: string;
   system_name: string;
   version_label: string;
-  source: "server_sample" | "local_bundle" | "predictions_only";
+  source: "server_sample" | "local_bundle" | "predictions_only" | "llm_hosted" | "llm_self_hosted";
   sample_key: string;
   model_type: string;
+  provider: string;
+  model_name: string;
+  prompt_version: string;
   feature_columns: string[];
   favourable_label: string;
   notes: string;
@@ -191,15 +197,26 @@ export interface Dataset {
   period_start: string | null;
   period_end: string | null;
   is_sample: boolean;
+  is_real_data: boolean;
+  source_note: string;
   created_at: string;
-  suggested_config: Record<string, unknown> | null;
+  suggested_config: (Partial<RunConfig> & { by_version?: Record<string, Partial<RunConfig>> }) | null;
 }
 
 export interface RunConfig {
-  prediction_column: string;
+  prediction_column?: string;
+  prompt_column?: string | null;
+  output_column?: string | null;
+  context_column?: string | null;
+  score_column?: string | null;
+  citations_column?: string | null;
+  human_reviewed_column?: string | null;
+  human_override_column?: string | null;
+  require_citations?: boolean;
+  system_type?: SystemType;
   label_column?: string | null;
   group_columns: string[];
-  favourable_label: string;
+  favourable_label?: string;
   id_columns?: string[];
   feature_columns?: string[];
   min_group_size?: number;
@@ -337,7 +354,7 @@ export interface Overview {
     name: string;
     latest_run_id: string | null;
     latest_run_at: string | null;
-    coverage: Record<Category, { status: CoverageStatus; status_label: string; counts: Partial<Record<ResultState, number>> }> | null;
+    coverage: Partial<Record<Category, { status: CoverageStatus; status_label: string; counts: Partial<Record<ResultState, number>> }>> | null;
     open_findings: number;
     control_gaps: number;
   }[];
@@ -350,9 +367,11 @@ export interface Overview {
     active_runs: number;
   };
   sample_mode: boolean;
+  real_data_mode: boolean;
 }
 
 export interface RunPreview {
+  system_type: SystemType;
   config: RunConfig;
   available_checks: Record<Category, { available: boolean; reason: string; error_rates?: boolean }>;
   data_quality: Record<string, { rows: number; columns: number; columns_with_missing: Record<string, number> }>;
@@ -380,3 +399,196 @@ export interface RunDiff {
   };
   note: string;
 }
+
+export interface Dependency {
+  id: string;
+  system: string;
+  name: string;
+  service: string;
+  role: "model_provider" | "cloud" | "data_labelling" | "analytics" | "other";
+  personal_data_shared: boolean;
+  data_categories: string[];
+  region: string;
+  outside_india: boolean;
+  outside_eea: boolean;
+  transfer_mechanism: string;
+  contract_in_place: boolean;
+  contract_reviewed_on: string | null;
+  trains_on_customer_data: "yes" | "no" | "unknown";
+  retention_days: number | null;
+  subprocessors_listed: boolean;
+  exit_plan: boolean;
+  criticality: "low" | "medium" | "high";
+  last_reviewed: string | null;
+  notes: string;
+}
+
+export type RightKey = "access" | "correction" | "erasure" | "withdraw_consent" | "grievance" | "human_review";
+
+export interface RightsProcess {
+  id: string;
+  system: string;
+  right: RightKey;
+  right_label: string;
+  procedure_exists: boolean;
+  owner: string | null;
+  owner_name: string | null;
+  channel: string;
+  sla_days: number | null;
+  last_tested: string | null;
+  requests_12m: number;
+  closed_on_time_12m: number;
+  evidence_note: string;
+}
+
+// ==========================================
+// Cloud Security (Prowler) Types
+// ==========================================
+export type CloudProvider = "AWS" | "AZURE" | "GCP";
+export type CloudAccountStatus = "CONNECTED" | "ERROR" | "PENDING" | "DISABLED";
+export type CloudScanStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
+export type CloudFindingSeverity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFORMATIONAL";
+export type CloudFindingStatus = "PASS" | "FAIL" | "MUTED";
+export type CloudFindingLifecycle = "OPEN" | "IN_REMEDIATION" | "RESOLVED" | "ACCEPTED" | "FALSE_POSITIVE";
+
+export interface CloudAccount {
+  id: string;
+  tenant: string;
+  name: string;
+  provider: CloudProvider;
+  account_id: string;
+  region_default: string;
+  role_arn: string;
+  credentials_ref?: string;
+  environment: "PRODUCTION" | "STAGING" | "DEVELOPMENT";
+  status: CloudAccountStatus;
+  compliance_score: number;
+  last_scanned_at: string | null;
+  last_scan_status: string;
+  total_findings_count: number;
+  critical_findings_count: number;
+  high_findings_count: number;
+  medium_findings_count: number;
+  low_findings_count: number;
+  cloud_connection?: string;
+  cloud_connection_name?: string;
+  created_by?: string;
+  created_by_name?: string;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CloudScan {
+  id: string;
+  tenant: string;
+  account: string;
+  account_name: string;
+  account_provider: CloudProvider;
+  account_id_val: string;
+  scan_type: string;
+  status: CloudScanStatus;
+  started_at: string | null;
+  completed_at: string | null;
+  duration_seconds: number;
+  total_checks: number;
+  passed_checks: number;
+  failed_checks: number;
+  muted_checks: number;
+  critical_findings: number;
+  high_findings: number;
+  medium_findings: number;
+  low_findings: number;
+  compliance_score: number;
+  error_message: string;
+  prowler_version: string;
+  initiated_by?: string;
+  initiated_by_name?: string;
+  created_at: string;
+}
+
+export interface CloudFinding {
+  id: string;
+  tenant: string;
+  scan: string;
+  account: string;
+  account_name: string;
+  provider: CloudProvider;
+  check_id: string;
+  check_title: string;
+  service: string;
+  severity: CloudFindingSeverity;
+  status: CloudFindingStatus;
+  status_extended: string;
+  resource_id: string;
+  resource_name: string;
+  region: string;
+  remediation_recommendation_text: string;
+  remediation_recommendation_url: string;
+  remediation_code: string;
+  compliance: string[];
+  risk_score: number;
+  lifecycle_status: CloudFindingLifecycle;
+  is_latest?: boolean;
+  affected_asset?: string;
+  affected_asset_name?: string;
+  resolution_note?: string;
+  resolved_at?: string | null;
+  created_at: string;
+}
+
+export interface ProwlerRule {
+  id: string;
+  check_id: string;
+  provider: CloudProvider;
+  service: string;
+  title: string;
+  severity: CloudFindingSeverity;
+  description: string;
+  rationale: string;
+  remediation_text: string;
+  remediation_url: string;
+  remediation_code_sample: string;
+  compliance_frameworks: string[];
+  is_active: boolean;
+}
+
+export interface CloudSecurityOverview {
+  overall_score: number;
+  total_accounts: number;
+  connected_accounts: number;
+  error_accounts: number;
+  severity_counts: {
+    CRITICAL: number;
+    HIGH: number;
+    MEDIUM: number;
+    LOW: number;
+  };
+  status_counts: {
+    PASS: number;
+    FAIL: number;
+    RESOLVED: number;
+  };
+  providers_summary: Record<
+    CloudProvider,
+    {
+      accounts_count: number;
+      avg_score: number;
+      open_issues: number;
+    }
+  >;
+  top_services: {
+    service: string;
+    provider: CloudProvider;
+    count: number;
+  }[];
+  recent_scans: CloudScan[];
+  critical_findings: CloudFinding[];
+  frameworks: {
+    code: string;
+    name: string;
+    provider: string;
+    score: number;
+  }[];
+}
+

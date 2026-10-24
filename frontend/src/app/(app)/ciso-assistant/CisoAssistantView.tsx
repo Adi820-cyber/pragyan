@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { call } from "@/lib/client/api";
 import {
   SlidersHorizontal,
   ShieldCheck,
@@ -82,448 +83,53 @@ interface RiskItem {
   mitigating_control: string;
 }
 
-// Initial Standard CISO Assistant Data
-const INITIAL_FRAMEWORKS: FrameworkSummary[] = [
-  {
-    code: "ISO-27001-2022",
-    name: "ISO/IEC 27001:2022",
-    version: "2022",
-    publisher: "ISO / IEC",
-    description: "International benchmark for Information Security Management Systems (ISMS).",
-    icon: "ShieldCheck",
-    total_controls: 5,
-    implemented: 4,
-    in_progress: 1,
-    not_started: 0,
-    compliance_score: 80.0,
-  },
-  {
-    code: "NIST-CSF-2.0",
-    name: "NIST Cybersecurity Framework 2.0",
-    version: "2.0",
-    publisher: "NIST",
-    description: "Govern, Identify, Protect, Detect, Respond, and Recover core taxonomy.",
-    icon: "Layers",
-    total_controls: 4,
-    implemented: 3,
-    in_progress: 1,
-    not_started: 0,
-    compliance_score: 75.0,
-  },
-  {
-    code: "SOC-2-TYPE-2",
-    name: "AICPA SOC 2 Type II",
-    version: "2020",
-    publisher: "AICPA",
-    description: "Trust Services Criteria covering Security, Availability, and Confidentiality.",
-    icon: "Lock",
-    total_controls: 3,
-    implemented: 2,
-    in_progress: 1,
-    not_started: 0,
-    compliance_score: 66.7,
-  },
-  {
-    code: "CIS-CONTROLS-V8",
-    name: "CIS Critical Security Controls v8",
-    version: "v8",
-    publisher: "Center for Internet Security",
-    description: "Prescriptive technical safeguard baseline for enterprise defense.",
-    icon: "CheckCircle2",
-    total_controls: 3,
-    implemented: 2,
-    in_progress: 1,
-    not_started: 0,
-    compliance_score: 66.7,
-  },
-  {
-    code: "DPDP-GDPR",
-    name: "DPDP Act 2023 & EU GDPR",
-    version: "2023",
-    publisher: "Gov of India / EU",
-    description: "Personal data fiduciary obligations, consent rules, and breach notification.",
-    icon: "FileText",
-    total_controls: 2,
-    implemented: 2,
-    in_progress: 0,
-    not_started: 0,
-    compliance_score: 100.0,
-  },
-  {
-    code: "ISO-42001-AI",
-    name: "ISO/IEC 42001:2023 (AI GRC)",
-    version: "2023",
-    publisher: "ISO / IEC JTC 1",
-    description: "Global certifiable standard for Artificial Intelligence Management Systems.",
-    icon: "Cpu",
-    total_controls: 2,
-    implemented: 2,
-    in_progress: 0,
-    not_started: 0,
-    compliance_score: 100.0,
-  },
-];
+interface Overview {
+  global_posture_score: number;
+  open_gaps_count: number;
+  is_baseline: boolean;
+  baseline_note: string;
+  frameworks: FrameworkSummary[];
+}
 
-const INITIAL_CONTROLS: ControlItem[] = [
-  {
-    framework_code: "ISO-27001-2022",
-    code: "A.5.15",
-    domain: "Access Control",
-    title: "Access control and identity verification",
-    description: "Access to systems, networks, and applications must be authenticated via role-based access control (RBAC) and multi-factor authentication (MFA).",
-    guidance: "Enforce MFA for all console, SSH, and production API access. Integrate centralized IdP with quarterly user access reviews.",
-    status: "IMPLEMENTED",
-    crosswalk_tag: "CTRL-IAM-MFA",
-  },
-  {
-    framework_code: "ISO-27001-2022",
-    code: "A.8.24",
-    domain: "Cryptography",
-    title: "Use of cryptography and transit protection",
-    description: "Rules for effective use of cryptography, key management, and transit encryption must be defined and implemented.",
-    guidance: "Enforce TLS 1.3 in transit and AES-256-GCM at rest across all data stores, model caches, and VPC peering links.",
-    status: "IMPLEMENTED",
-    crosswalk_tag: "CTRL-CRYPTO-TRANSIT",
-  },
-  {
-    framework_code: "ISO-27001-2022",
-    code: "A.8.16",
-    domain: "SecOps & Monitoring",
-    title: "Monitoring activities and event logging",
-    description: "Networks, systems, and applications must be continuously monitored for anomalous behavior and security audit events recorded.",
-    guidance: "Aggregate security logs into SIEM/Wazuh with immutable WORM retention and automated alert triage.",
-    status: "IN_PROGRESS",
-    crosswalk_tag: "CTRL-LOGGING-SIEM",
-  },
-  {
-    framework_code: "ISO-27001-2022",
-    code: "A.8.8",
-    domain: "Vulnerability Management",
-    title: "Management of technical vulnerabilities",
-    description: "Information about technical vulnerabilities of information systems in use must be obtained and exposure evaluated.",
-    guidance: "Weekly automated container and host vulnerability scans. Remediate critical CVEs within 72 hours.",
-    status: "IN_PROGRESS",
-    crosswalk_tag: "CTRL-VULN-MGMT",
-  },
-  {
-    framework_code: "ISO-27001-2022",
-    code: "A.5.24",
-    domain: "Incident Management",
-    title: "Information security incident management planning",
-    description: "The organization must plan and prepare for managing information security incidents by defining response processes.",
-    guidance: "Document Playbooks for automated host isolation, credential revocation, and regulatory breach notification.",
-    status: "IMPLEMENTED",
-    crosswalk_tag: "CTRL-INCIDENT-IR",
-  },
-  {
-    framework_code: "NIST-CSF-2.0",
-    code: "PR.AA-01",
-    domain: "Protect (PR) - Identity",
-    title: "Identities and credentials are authenticated and managed",
-    description: "Users, services, and hardware are issued credentials, authenticated via strong mechanisms, and managed through their lifecycle.",
-    guidance: "Deploy FIDO2/WebAuthn or TOTP MFA. Disable legacy basic authentication.",
-    status: "IMPLEMENTED",
-    crosswalk_tag: "CTRL-IAM-MFA",
-  },
-  {
-    framework_code: "NIST-CSF-2.0",
-    code: "PR.DS-01",
-    domain: "Protect (PR) - Data Security",
-    title: "Data-at-rest and in-transit are protected",
-    description: "Confidentiality, integrity, and availability of data in transit and at rest are maintained using cryptographically secure algorithms.",
-    guidance: "Automated certificate management and encrypted KMS volume storage.",
-    status: "IMPLEMENTED",
-    crosswalk_tag: "CTRL-CRYPTO-TRANSIT",
-  },
-  {
-    framework_code: "NIST-CSF-2.0",
-    code: "DE.CM-01",
-    domain: "Detect (DE) - Monitoring",
-    title: "Networks and physical environments are monitored",
-    description: "Network traffic, system logs, and security events are monitored to detect potential adverse events.",
-    guidance: "Ingest NetBox cable path packet flows, firewall logs, and cloud audit trails into centralized analytics.",
-    status: "IN_PROGRESS",
-    crosswalk_tag: "CTRL-LOGGING-SIEM",
-  },
-  {
-    framework_code: "NIST-CSF-2.0",
-    code: "RS.MA-01",
-    domain: "Respond (RS) - Mitigation",
-    title: "Incidents are contained and mitigated",
-    description: "Incidents are contained to prevent spread and mitigate impact on operations and customers.",
-    guidance: "Automated security orchestration and response (SOAR) containment actions with human lead sign-off.",
-    status: "IMPLEMENTED",
-    crosswalk_tag: "CTRL-INCIDENT-IR",
-  },
-  {
-    framework_code: "SOC-2-TYPE-2",
-    code: "CC6.1",
-    domain: "Logical Access",
-    title: "Logical access security controls",
-    description: "The entity implements logical access security software, infrastructure, and architectures over protected information assets.",
-    guidance: "Zero-Trust network segmentation, bastion hosts, and time-bound credential rotation.",
-    status: "IMPLEMENTED",
-    crosswalk_tag: "CTRL-IAM-MFA",
-  },
-  {
-    framework_code: "SOC-2-TYPE-2",
-    code: "CC6.6",
-    domain: "Perimeter Security",
-    title: "Boundary protection and network segmentation",
-    description: "The entity implements logical boundaries and network filters to protect information assets from unauthorized intrusion.",
-    guidance: "NextGen Firewalls, WAF rule inspection, and private VPC subnets isolating database tiers.",
-    status: "IMPLEMENTED",
-    crosswalk_tag: "CTRL-CRYPTO-TRANSIT",
-  },
-  {
-    framework_code: "SOC-2-TYPE-2",
-    code: "CC7.2",
-    domain: "System Operations",
-    title: "Anomalous activity monitoring and event alerts",
-    description: "The entity monitors system components and operation for anomalies indicative of malicious acts.",
-    guidance: "24/7 SIEM monitoring with automated notification to on-call security responders.",
-    status: "IN_PROGRESS",
-    crosswalk_tag: "CTRL-LOGGING-SIEM",
-  },
-  {
-    framework_code: "CIS-CONTROLS-V8",
-    code: "CIS-5.1",
-    domain: "Account Management",
-    title: "Establish and maintain an inventory of accounts",
-    description: "Use an automated inventory of all accounts authorized to access company data or systems.",
-    guidance: "SCIM provisioning and automated deprovisioning when employee contracts terminate.",
-    status: "IMPLEMENTED",
-    crosswalk_tag: "CTRL-IAM-MFA",
-  },
-  {
-    framework_code: "CIS-CONTROLS-V8",
-    code: "CIS-3.10",
-    domain: "Data Protection",
-    title: "Encrypt sensitive data in transit",
-    description: "Encrypt sensitive data in transit over public networks and cross-datacenter links.",
-    guidance: "Enforce TLS 1.3 and disable SSLv3, TLS 1.0, and TLS 1.1 cipher suites.",
-    status: "IMPLEMENTED",
-    crosswalk_tag: "CTRL-CRYPTO-TRANSIT",
-  },
-  {
-    framework_code: "CIS-CONTROLS-V8",
-    code: "CIS-8.2",
-    domain: "Audit Log Management",
-    title: "Collect and store audit logs centrally",
-    description: "Ensure that all systems send audit logs to a centralized log management repository.",
-    guidance: "Configure rsyslog/Fluentbit daemon to ship logs to hardened Elastic/PostgreSQL repository.",
-    status: "IN_PROGRESS",
-    crosswalk_tag: "CTRL-LOGGING-SIEM",
-  },
-  {
-    framework_code: "DPDP-GDPR",
-    code: "DPDP-SEC-01",
-    domain: "Data Safeguards",
-    title: "Reasonable security safeguards to prevent personal data breach",
-    description: "Data Fiduciary must implement appropriate technical and organizational measures to prevent breach of personal data.",
-    guidance: "Pseudonymization, column-level AES encryption, and strict role segregation for PII datasets.",
-    status: "IMPLEMENTED",
-    crosswalk_tag: "CTRL-CRYPTO-TRANSIT",
-  },
-  {
-    framework_code: "DPDP-GDPR",
-    code: "DPDP-NOTIF-02",
-    domain: "Breach Response",
-    title: "Timely breach notification to Data Protection Board & Principals",
-    description: "In the event of a personal data breach, give the Data Protection Board and each affected Data Principal intimation.",
-    guidance: "Formal incident escalation workflow triggered upon high-severity alert containment.",
-    status: "IMPLEMENTED",
-    crosswalk_tag: "CTRL-INCIDENT-IR",
-  },
-  {
-    framework_code: "ISO-42001-AI",
-    code: "AIMS-B.7",
-    domain: "AI Lifecycle",
-    title: "AI Model Fairness, Bias & Drift Verification",
-    description: "AI systems must be verified for demographic parity, equalized odds, and feature drift before production deployment.",
-    guidance: "Run automated Reskure AI Audit runs and maintain signed attestations of fairness thresholds.",
-    status: "IMPLEMENTED",
-    crosswalk_tag: "CTRL-AI-BIAS-DRIFT",
-  },
-  {
-    framework_code: "ISO-42001-AI",
-    code: "AIMS-B.9",
-    domain: "AI Transparency",
-    title: "Model Explainability and Feature Attribution",
-    description: "AI decisions affecting individuals must provide verifiable feature contribution metrics (e.g. SHAP values).",
-    guidance: "Store SHAP summary plots and mean absolute feature impact with audit run bundles.",
-    status: "IMPLEMENTED",
-    crosswalk_tag: "CTRL-AI-EXPLAINABILITY",
-  },
-];
-
-const INITIAL_CORE_CONTROLS: AppliedCoreControl[] = [
-  {
-    tag: "CTRL-IAM-MFA",
-    name: "Zero-Trust Identity, RBAC & Multi-Factor Authentication",
-    domain: "Identity & Access Governance",
-    description: "Centralized identity provider (IdP) enforcing hardware/TOTP MFA and least-privilege role-based access control.",
-    implementation_status: "IMPLEMENTED",
-    compliance_coverage: ["ISO 27001 (A.5.15)", "NIST CSF 2.0 (PR.AA-01)", "SOC 2 (CC6.1)", "CIS v8 (5.1)"],
-    owner: "CISO",
-    last_audited: "2026-10-15",
-  },
-  {
-    tag: "CTRL-CRYPTO-TRANSIT",
-    name: "End-to-End Cryptography (TLS 1.3 & AES-256-GCM)",
-    domain: "Data Security & Boundary Protection",
-    description: "FIPS 140-3 compliant encryption enforced across internal service mesh, external load balancers, and at-rest databases.",
-    implementation_status: "IMPLEMENTED",
-    compliance_coverage: ["ISO 27001 (A.8.24)", "NIST CSF 2.0 (PR.DS-01)", "SOC 2 (CC6.6)", "CIS v8 (3.10)", "DPDP (SEC-01)"],
-    owner: "Cloud Lead",
-    last_audited: "2026-10-20",
-  },
-  {
-    tag: "CTRL-LOGGING-SIEM",
-    name: "Centralized Audit Logging, SIEM & Anomaly Detection",
-    domain: "Security Operations & Detection",
-    description: "Automated ingestion of system logs, NetBox cable path packet traces, and cloud API audits into immutable storage.",
-    implementation_status: "IN_PROGRESS",
-    compliance_coverage: ["ISO 27001 (A.8.16)", "NIST CSF 2.0 (DE.CM-01)", "SOC 2 (CC7.2)", "CIS v8 (8.2)"],
-    owner: "SecOps Lead",
-    last_audited: "2026-10-18",
-  },
-  {
-    tag: "CTRL-VULN-MGMT",
-    name: "Continuous Vulnerability Scanning & Patch Management",
-    domain: "Threat & Vulnerability Management",
-    description: "Automated weekly static code analysis (SAST), container scanning, and external perimeter penetration testing.",
-    implementation_status: "IN_PROGRESS",
-    compliance_coverage: ["ISO 27001 (A.8.8)"],
-    owner: "AppSec Engineer",
-    last_audited: "2026-10-12",
-  },
-  {
-    tag: "CTRL-INCIDENT-IR",
-    name: "Automated Incident Containment & Breach Notification",
-    domain: "Incident Response & Business Continuity",
-    description: "Tested incident response plan with automated host network isolation, IP blocking, and regulatory intimation within 72h.",
-    implementation_status: "IMPLEMENTED",
-    compliance_coverage: ["ISO 27001 (A.5.24)", "NIST CSF 2.0 (RS.MA-01)", "DPDP (NOTIF-02)"],
-    owner: "Incident Lead",
-    last_audited: "2026-10-22",
-  },
-  {
-    tag: "CTRL-AI-BIAS-DRIFT",
-    name: "Responsible AI Model Bias & Covariate Drift Auditing",
-    domain: "AI Governance & Algorithmic Trust",
-    description: "Rigorous statistical checking of demographic parity, disparate impact denominator, and prediction distribution drift.",
-    implementation_status: "IMPLEMENTED",
-    compliance_coverage: ["ISO 42001 (AIMS-B.7)"],
-    owner: "AI Ethics Lead",
-    last_audited: "2026-10-23",
-  },
-  {
-    tag: "CTRL-AI-EXPLAINABILITY",
-    name: "Tree-Model SHAP Feature Attribution & Decision Logging",
-    domain: "AI Governance & Algorithmic Trust",
-    description: "Immutable storage of SHAP explainability matrices for all automated screening and decisioning models.",
-    implementation_status: "IMPLEMENTED",
-    compliance_coverage: ["ISO 42001 (AIMS-B.9)"],
-    owner: "Principal ML Eng",
-    last_audited: "2026-10-23",
-  },
-];
-
-const INITIAL_RISKS: RiskItem[] = [
-  {
-    identifier: "RSK-SEC-001",
-    title: "Unauthorized Access via Stolen Developer Credentials",
-    category: "CYBERSECURITY",
-    status: "RESIDUAL_MONITORING",
-    inherent_likelihood: 4,
-    inherent_impact: 5,
-    inherent_score: 20,
-    inherent_severity: "CRITICAL",
-    residual_likelihood: 2,
-    residual_impact: 3,
-    residual_score: 6,
-    residual_severity: "MEDIUM",
-    treatment_strategy: "MITIGATE",
-    treatment_plan: "Enforce FIDO2 hardware security keys, eliminate static API tokens, and monitor sign-in velocities.",
-    mitigating_control: "CTRL-IAM-MFA",
-  },
-  {
-    identifier: "RSK-PRIV-002",
-    title: "DPDP / GDPR Compliance Violation from Unencrypted PII Ingestion",
-    category: "DATA_PRIVACY",
-    status: "RESIDUAL_MONITORING",
-    inherent_likelihood: 4,
-    inherent_impact: 4,
-    inherent_score: 16,
-    inherent_severity: "HIGH",
-    residual_likelihood: 1,
-    residual_impact: 3,
-    residual_score: 3,
-    residual_severity: "LOW",
-    treatment_strategy: "MITIGATE",
-    treatment_plan: "NetBox cable path verification ensures MACsec encryption across physical trunk lines and TLS 1.3 on APIs.",
-    mitigating_control: "CTRL-CRYPTO-TRANSIT",
-  },
-  {
-    identifier: "RSK-AI-003",
-    title: "Algorithmic Demographic Bias in Automated Candidate Screening Model",
-    category: "COMPLIANCE",
-    status: "RESIDUAL_MONITORING",
-    inherent_likelihood: 3,
-    inherent_impact: 5,
-    inherent_score: 15,
-    inherent_severity: "HIGH",
-    residual_likelihood: 1,
-    residual_impact: 2,
-    residual_score: 2,
-    residual_severity: "LOW",
-    treatment_strategy: "MITIGATE",
-    treatment_plan: "Mandatory Reskure AI Audit pre-deployment gate with demographic parity ratio >= 0.80 and sign-off.",
-    mitigating_control: "CTRL-AI-BIAS-DRIFT",
-  },
-  {
-    identifier: "RSK-OPS-004",
-    title: "Inter-Datacenter Fiber Cut or Network Partition Causing Outage",
-    category: "OPERATIONAL",
-    status: "ASSESSED",
-    inherent_likelihood: 3,
-    inherent_impact: 4,
-    inherent_score: 12,
-    inherent_severity: "MEDIUM",
-    residual_likelihood: 2,
-    residual_impact: 2,
-    residual_score: 4,
-    residual_severity: "LOW",
-    treatment_strategy: "MITIGATE",
-    treatment_plan: "Dual-homed BGP routing and redundant patch panel optical trunks modeled in NetBox DCIM.",
-    mitigating_control: "CTRL-LOGGING-SIEM",
-  },
-  {
-    identifier: "RSK-THREAT-005",
-    title: "Ransomware Infiltration via Unpatched Perimeter Vulnerability",
-    category: "CYBERSECURITY",
-    status: "MITIGATION_PLANNED",
-    inherent_likelihood: 4,
-    inherent_impact: 5,
-    inherent_score: 20,
-    inherent_severity: "CRITICAL",
-    residual_likelihood: 2,
-    residual_impact: 4,
-    residual_score: 8,
-    residual_severity: "MEDIUM",
-    treatment_strategy: "MITIGATE",
-    treatment_plan: "NextGen WAF inspection, automated host isolation playbooks, and air-gapped immutable backups.",
-    mitigating_control: "CTRL-INCIDENT-IR",
-  },
-];
-
+const SEVERITY = (score: number): RiskItem["inherent_severity"] =>
+  score >= 20 ? "CRITICAL" : score >= 13 ? "HIGH" : score >= 6 ? "MEDIUM" : "LOW";
 export function CisoAssistantView() {
   const [activeTab, setActiveTab] = useState<"overview" | "frameworks" | "crosswalks" | "risk-matrix" | "gaps">("overview");
   const [selectedFramework, setSelectedFramework] = useState<string>("ALL");
   const [selectedDomain, setSelectedDomain] = useState<string>("ALL");
-  const [controls, setControls] = useState<ControlItem[]>(INITIAL_CONTROLS);
-  const [risks, setRisks] = useState<RiskItem[]>(INITIAL_RISKS);
+  const [controls, setControls] = useState<ControlItem[]>([]);
+  const [risks, setRisks] = useState<RiskItem[]>([]);
+  const [overview, setOverview] = useState<Overview | null>(null);
+  const [coreControls, setCoreControls] = useState<AppliedCoreControl[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const reload = useCallback(async () => {
+    try {
+      const [ov, ctl, rsk, cw] = await Promise.all([
+        call<Overview>("GET", "ciso/overview/"),
+        call<{ controls: ControlItem[] }>("GET", "ciso/controls/"),
+        call<{ risks: RiskItem[] }>("GET", "ciso/risks/"),
+        call<{ crosswalks: AppliedCoreControl[] }>("GET", "ciso/crosswalks/"),
+      ]);
+      setOverview(ov);
+      setControls(ctl.controls);
+      setRisks(rsk.risks);
+      setCoreControls(cw.crosswalks);
+      setLoadError(null);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "Could not load the CISO Assistant data.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // Fetch on mount: the state update happens after the request resolves.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void reload();
+  }, [reload]);
   const [crosswalkNotification, setCrosswalkNotification] = useState<string | null>(null);
   const [filterSeverity, setFilterSeverity] = useState<string | null>(null);
 
@@ -538,7 +144,7 @@ export function CisoAssistantView() {
 
   // Re-compute Framework Summaries dynamically based on active control statuses
   const dynamicFrameworks = useMemo(() => {
-    return INITIAL_FRAMEWORKS.map((fw) => {
+    return (overview?.frameworks ?? []).map((fw) => {
       const fwControls = controls.filter((c) => c.framework_code === fw.code);
       const total = fwControls.length;
       const implemented = fwControls.filter((c) => c.status === "IMPLEMENTED").length;
@@ -554,7 +160,7 @@ export function CisoAssistantView() {
         compliance_score: score,
       };
     });
-  }, [controls]);
+  }, [controls, overview]);
 
   // Global Compliance Posture Score
   const globalScore = useMemo(() => {
@@ -581,73 +187,52 @@ export function CisoAssistantView() {
     return { inherentMatrix: im, residualMatrix: rm };
   }, [risks]);
 
-  // Handle "Assess Once, Comply with Many" Control Status Toggle
-  const handleToggleControlStatus = (controlCode: string) => {
-    const currentControl = controls.find((c) => c.code === controlCode);
-    if (!currentControl) return;
-
-    const nextStatus: ControlItem["status"] =
-      currentControl.status === "IMPLEMENTED"
-        ? "IN_PROGRESS"
-        : currentControl.status === "IN_PROGRESS"
-        ? "NOT_STARTED"
-        : "IMPLEMENTED";
-
-    const tag = currentControl.crosswalk_tag;
-    let syncedCount = 0;
-
-    const updated = controls.map((c) => {
-      if (c.code === controlCode || (tag && c.crosswalk_tag === tag)) {
-        syncedCount += 1;
-        return { ...c, status: nextStatus };
+  // "Assess Once, Comply with Many": the server applies the change and syncs mapped controls.
+  const handleToggleControlStatus = async (controlCode: string) => {
+    const current = controls.find((c) => c.code === controlCode);
+    if (!current) return;
+    const nextStatus =
+      current.status === "IMPLEMENTED" ? "IN_PROGRESS" : current.status === "IN_PROGRESS" ? "NOT_STARTED" : "IMPLEMENTED";
+    setActionError(null);
+    try {
+      const result = await call<{ synced_controls_count: number }>("PATCH", "ciso/controls/", {
+        code: controlCode,
+        status: nextStatus,
+        sync_crosswalks: true,
+      });
+      await reload();
+      if (result.synced_controls_count > 1) {
+        setCrosswalkNotification(
+          `Updated ${controlCode} and synced the status across ${result.synced_controls_count} mapped controls.`,
+        );
+        setTimeout(() => setCrosswalkNotification(null), 4500);
       }
-      return c;
-    });
-
-    setControls(updated);
-
-    if (tag && syncedCount > 1) {
-      setCrosswalkNotification(
-        `⚡ Assess Once, Comply with Many: Updated ${controlCode} and synced status across ${syncedCount} mapped frameworks (${tag})!`
-      );
-      setTimeout(() => setCrosswalkNotification(null), 4500);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "The status could not be changed.");
     }
   };
 
-  // Add Custom Risk
-  const handleAddRisk = (e: React.FormEvent) => {
+  const handleAddRisk = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRiskTitle.trim()) return;
-
-    const iscore = newRiskLikelihood * newRiskImpact;
-    const isev = iscore >= 20 ? "CRITICAL" : iscore >= 13 ? "HIGH" : iscore >= 6 ? "MEDIUM" : "LOW";
-    const rscore = Math.max(1, newRiskLikelihood - 1) * Math.max(1, newRiskImpact - 1);
-    const rsev = rscore >= 20 ? "CRITICAL" : rscore >= 13 ? "HIGH" : rscore >= 6 ? "MEDIUM" : "LOW";
-
-    const newRiskItem: RiskItem = {
-      identifier: `RSK-USER-${String(risks.length + 1).padStart(3, "0")}`,
-      title: newRiskTitle,
-      category: newRiskCategory,
-      status: "IDENTIFIED",
-      inherent_likelihood: newRiskLikelihood,
-      inherent_impact: newRiskImpact,
-      inherent_score: iscore,
-      inherent_severity: isev as any,
-      residual_likelihood: Math.max(1, newRiskLikelihood - 1),
-      residual_impact: Math.max(1, newRiskImpact - 1),
-      residual_score: rscore,
-      residual_severity: rsev as any,
-      treatment_strategy: newRiskTreatment,
-      treatment_plan: newRiskPlan || "Standard mitigation controls deployed.",
-      mitigating_control: "CTRL-IAM-MFA",
-    };
-
-    setRisks([newRiskItem, ...risks]);
-    setShowAddRiskModal(false);
-    setNewRiskTitle("");
-    setNewRiskPlan("");
+    setActionError(null);
+    try {
+      await call("POST", "ciso/risks/", {
+        title: newRiskTitle.trim(),
+        category: newRiskCategory,
+        inherent_likelihood: newRiskLikelihood,
+        inherent_impact: newRiskImpact,
+        treatment_strategy: newRiskTreatment,
+        treatment_plan: newRiskPlan,
+      });
+      setShowAddRiskModal(false);
+      setNewRiskTitle("");
+      setNewRiskPlan("");
+      await reload();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "The risk could not be added.");
+    }
   };
-
   // Filtered controls list
   const filteredControls = useMemo(() => {
     return controls.filter((c) => {
@@ -681,7 +266,7 @@ export function CisoAssistantView() {
               CISO Assistant Community GRC Suite
             </h1>
             <span className="px-2 py-0.5 text-[11px] font-semibold tracking-wide uppercase rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
-              v1.0 • Connected
+              Live data
             </span>
           </div>
           <p className="text-sm text-slate-400 max-w-3xl">
@@ -703,6 +288,18 @@ export function CisoAssistantView() {
         </div>
       </div>
 
+      {loading && <p className="text-sm text-slate-400">Loading...</p>}
+      {loadError && (
+        <div role="alert" className="p-3.5 rounded-xl border border-red-500/40 bg-red-950/40 text-red-200 text-xs">{loadError}</div>
+      )}
+      {actionError && (
+        <div role="alert" className="p-3.5 rounded-xl border border-red-500/40 bg-red-950/40 text-red-200 text-xs">{actionError}</div>
+      )}
+      {overview?.is_baseline && (
+        <div className="p-3.5 rounded-xl border border-amber-500/40 bg-amber-950/30 text-amber-200 text-xs">
+          Starter baseline: {overview.baseline_note}
+        </div>
+      )}
       {/* Crosswalk Ripple Notification Banner */}
       {crosswalkNotification && (
         <div className="p-3.5 rounded-xl border border-cyan-500/40 bg-cyan-950/40 text-cyan-200 text-xs font-medium flex items-center justify-between shadow-lg shadow-cyan-950/50 animate-fadeIn">
@@ -818,7 +415,7 @@ export function CisoAssistantView() {
                 <Sparkles className="w-4 h-4 text-cyan-400" />
               </div>
               <div className="my-2 flex items-baseline gap-2">
-                <span className="text-3xl font-extrabold text-white">{INITIAL_CORE_CONTROLS.length}</span>
+                <span className="text-3xl font-extrabold text-white">{coreControls.length}</span>
                 <span className="text-xs text-cyan-400 font-medium">Single Source of Truth</span>
               </div>
               <div className="text-[11px] text-slate-400">
@@ -1010,7 +607,7 @@ export function CisoAssistantView() {
               >
                 All Standards
               </button>
-              {INITIAL_FRAMEWORKS.map((fw) => (
+              {dynamicFrameworks.map((fw) => (
                 <button
                   key={fw.code}
                   onClick={() => setSelectedFramework(fw.code)}
@@ -1107,7 +704,7 @@ export function CisoAssistantView() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5 font-mono">
-                {INITIAL_CORE_CONTROLS.map((ctrl) => (
+                {coreControls.map((ctrl) => (
                   <tr key={ctrl.tag} className="hover:bg-white/5 transition-colors">
                     <td className="py-3 px-4 font-bold text-cyan-400">{ctrl.tag}</td>
                     <td className="py-3 px-4 font-sans">
