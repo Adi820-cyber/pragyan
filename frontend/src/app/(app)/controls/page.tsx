@@ -20,7 +20,7 @@ export default async function ControlsPage({ searchParams }: PageProps<"/control
     systems = s.filter((x) => x.status !== "ARCHIVED");
     packs = p;
     role = me.active_membership?.role ?? "";
-    const wanted = typeof params.system === "string" ? params.system : systems[0]?.id;
+    const wanted = typeof params.system === "string" ? params.system : (systems.find((x) => x.jurisdictions?.length) ?? systems[0])?.id;
     current = systems.find((x) => x.id === wanted) ?? systems[0];
     if (current) assessments = await list<ControlAssessment>(`/ai/control-assessments/?system=${current.id}`);
   } catch (error) {

@@ -423,6 +423,92 @@ class CloudSecurityOverviewView(APIView):
         })
 
 
+def seed_demo_cloud(mem):
+    """Creates the sample (simulated) cloud accounts and scans for mem's tenant. Safe to call repeatedly for accounts; adds a scan per call only when none exists."""
+    tid = mem.tenant_id
+
+    # 1. Populate rules catalog in database
+    for r in PROWLER_RULES_CATALOG:
+        ProwlerRule.objects.get_or_create(
+            check_id=r["check_id"],
+            defaults={
+                "provider": r["provider"],
+                "service": r["service"],
+                "title": r["title"],
+                "severity": r["severity"],
+                "description": r["description"],
+                "rationale": r.get("rationale", ""),
+                "remediation_text": r.get("remediation_text", ""),
+                "remediation_url": r.get("remediation_url", ""),
+                "remediation_code_sample": r.get("remediation_code_sample", ""),
+                "compliance_frameworks": r.get("compliance_frameworks", []),
+            },
+        )
+
+    # 2. Seed 3 multi-cloud accounts
+    aws_acc, _ = CloudAccount.all_objects.get_or_create(
+        tenant_id=tid,
+        provider="AWS",
+        account_id="123456789012",
+        defaults={
+            "name": "Production AWS Workloads (US-East)",
+            "region_default": "us-east-1",
+            "role_arn": "arn:aws:iam::123456789012:role/ReskureProwlerAuditorRole",
+            "environment": "PRODUCTION",
+            "status": "CONNECTED",
+            "created_by": mem,
+            "notes": "Primary enterprise Kubernetes & database clusters",
+        },
+    )
+
+    azure_acc, _ = CloudAccount.all_objects.get_or_create(
+        tenant_id=tid,
+        provider="AZURE",
+        account_id="sub-4f81-9b2e-0012",
+        defaults={
+            "name": "Azure Enterprise Data Platform",
+            "region_default": "westeurope",
+            "role_arn": "sp-reskure-secops-auditor",
+            "environment": "PRODUCTION",
+            "status": "CONNECTED",
+            "created_by": mem,
+            "notes": "Data analytics, PowerBI pipelines and storage lakes",
+        },
+    )
+
+    gcp_acc, _ = CloudAccount.all_objects.get_or_create(
+        tenant_id=tid,
+        provider="GCP",
+        account_id="prj-finance-lake-prod",
+        defaults={
+            "name": "GCP Cloud SQL & AI Pipeline",
+            "region_default": "us-central1",
+            "role_arn": "reskure-agent@prj-finance-lake-prod.iam.gserviceaccount.com",
+            "environment": "PRODUCTION",
+            "status": "CONNECTED",
+            "created_by": mem,
+            "notes": "AI models, Cloud Storage datasets and internal analytics",
+        },
+    )
+
+    # 3. Trigger initial Prowler audits for all accounts
+    created_scans = []
+    for acc in [aws_acc, azure_acc, gcp_acc]:
+        if CloudScan.all_objects.filter(tenant_id=tid, account=acc).exists():
+            continue
+        scan = CloudScan.all_objects.create(
+            tenant_id=tid,
+            account=acc,
+            scan_type="FULL_AUDIT",
+            status="QUEUED",
+            initiated_by=mem,
+        )
+        CloudScannerEngine.execute_scan(str(scan.id))
+        scan.refresh_from_db()
+        created_scans.append(str(scan.id))
+    return len(created_scans)
+
+
 class CloudSecurityDemoSeedView(APIView):
     """
     Seeds realistic multi-cloud accounts and comprehensive Prowler scans.
@@ -432,88 +518,9 @@ class CloudSecurityDemoSeedView(APIView):
 
     def post(self, request):
         mem = _membership(request)
-        tid = mem.tenant_id
-
-        # 1. Populate rules catalog in database
-        for r in PROWLER_RULES_CATALOG:
-            ProwlerRule.objects.get_or_create(
-                check_id=r["check_id"],
-                defaults={
-                    "provider": r["provider"],
-                    "service": r["service"],
-                    "title": r["title"],
-                    "severity": r["severity"],
-                    "description": r["description"],
-                    "rationale": r.get("rationale", ""),
-                    "remediation_text": r.get("remediation_text", ""),
-                    "remediation_url": r.get("remediation_url", ""),
-                    "remediation_code_sample": r.get("remediation_code_sample", ""),
-                    "compliance_frameworks": r.get("compliance_frameworks", []),
-                },
-            )
-
-        # 2. Seed 3 multi-cloud accounts
-        aws_acc, _ = CloudAccount.all_objects.get_or_create(
-            tenant_id=tid,
-            provider="AWS",
-            account_id="123456789012",
-            defaults={
-                "name": "Production AWS Workloads (US-East)",
-                "region_default": "us-east-1",
-                "role_arn": "arn:aws:iam::123456789012:role/ReskureProwlerAuditorRole",
-                "environment": "PRODUCTION",
-                "status": "CONNECTED",
-                "created_by": mem,
-                "notes": "Primary enterprise Kubernetes & database clusters",
-            },
-        )
-
-        azure_acc, _ = CloudAccount.all_objects.get_or_create(
-            tenant_id=tid,
-            provider="AZURE",
-            account_id="sub-4f81-9b2e-0012",
-            defaults={
-                "name": "Azure Enterprise Data Platform",
-                "region_default": "westeurope",
-                "role_arn": "sp-reskure-secops-auditor",
-                "environment": "PRODUCTION",
-                "status": "CONNECTED",
-                "created_by": mem,
-                "notes": "Data analytics, PowerBI pipelines and storage lakes",
-            },
-        )
-
-        gcp_acc, _ = CloudAccount.all_objects.get_or_create(
-            tenant_id=tid,
-            provider="GCP",
-            account_id="prj-finance-lake-prod",
-            defaults={
-                "name": "GCP Cloud SQL & AI Pipeline",
-                "region_default": "us-central1",
-                "role_arn": "reskure-agent@prj-finance-lake-prod.iam.gserviceaccount.com",
-                "environment": "PRODUCTION",
-                "status": "CONNECTED",
-                "created_by": mem,
-                "notes": "AI models, Cloud Storage datasets and internal analytics",
-            },
-        )
-
-        # 3. Trigger initial Prowler audits for all accounts
-        created_scans = []
-        for acc in [aws_acc, azure_acc, gcp_acc]:
-            scan = CloudScan.all_objects.create(
-                tenant_id=tid,
-                account=acc,
-                scan_type="FULL_AUDIT",
-                status="QUEUED",
-                initiated_by=mem,
-            )
-            CloudScannerEngine.execute_scan(str(scan.id))
-            scan.refresh_from_db()
-            created_scans.append(str(scan.id))
-
+        created = seed_demo_cloud(mem)
         return Response({
             "message": "Sample accounts created and scanned against the built-in rule catalogue (simulated results, no cloud calls).",
             "accounts_seeded": 3,
-            "scans_completed": len(created_scans),
+            "scans_completed": created,
         }, status=status.HTTP_201_CREATED)

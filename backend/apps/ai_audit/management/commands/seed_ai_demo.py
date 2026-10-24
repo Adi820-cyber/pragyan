@@ -5,8 +5,11 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 
 from apps.ai_audit.sample.compas import RealDataUnavailable
-from apps.ai_audit.services.demo import seed_compas, seed_finsum, seed_hirelens
+from apps.ai_audit.services.demo import seed_audit_runs, seed_compas, seed_finsum, seed_hirelens
+from apps.cloud_security.views import seed_demo_cloud
 from apps.core.models import Membership, Tenant
+from apps.network.models import NetworkDevice
+from apps.network.traversal_engine import seed_demo_network
 
 USERS = [
     # (username, role, full name)
@@ -24,8 +27,12 @@ class Command(BaseCommand):
         parser.add_argument("--compas-file", help="Path to compas-scores-two-years.csv if the automatic download is not possible.")
         parser.add_argument("--offline", action="store_true", help="Skip the real-data download and use the synthetic tabular sample instead.")
 
-    @transaction.atomic
     def handle(self, *args, **options):
+        with transaction.atomic():
+            systems, tenant, memberships, founder, password = self._seed_base(options)
+        self._seed_rest(options, systems, tenant, memberships, founder, password)
+
+    def _seed_base(self, options):
         User = get_user_model()
         password = options["password"] or secrets.token_urlsafe(12)
         tenant, _ = Tenant.objects.get_or_create(slug="hirelens-demo", defaults={"name": "HireLens (demo)"})
@@ -54,6 +61,23 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.WARNING(f"Real data not loaded: {exc}"))
                 self.stdout.write(self.style.WARNING("Loading the synthetic tabular sample instead."))
                 systems.append(seed_hirelens(tenant, founder))
+
+        return systems, tenant, memberships, founder, password
+
+    def _seed_rest(self, options, systems, tenant, memberships, founder, password):
+        # Completed audits, computed by the real audit engine from the stored sample data. Run outside the
+        # base transaction so the long computation does not hold the database write lock.
+        for system in systems:
+            versions = ("v1", "v2") if system.system_type == "llm" else (("v1", "v2") if system.name.startswith("HireLens") else ("tool", "v1"))
+            for run in seed_audit_runs(tenant, founder, system, versions):
+                run.refresh_from_db()
+                self.stdout.write(f"  Audit     : {system.name} {run.model_version.version_label} -> {run.status}")
+
+        if not NetworkDevice.all_objects.filter(tenant_id=tenant.id).exists():
+            seed_demo_network(tenant)
+            self.stdout.write("  Network   : sample enterprise network loaded (synthetic)")
+        seed_demo_cloud(memberships["admin@hirelens.example"])
+        self.stdout.write("  Cloud     : sample accounts and simulated scans present (no cloud calls)")
 
         self.stdout.write(self.style.SUCCESS("Demo organisation ready."))
         self.stdout.write(f"  Tenant id : {tenant.id}")

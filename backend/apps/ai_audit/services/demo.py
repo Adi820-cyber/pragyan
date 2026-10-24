@@ -225,3 +225,42 @@ def seed_compas(tenant, actor: Membership, compas_file: Optional[str] = None) ->
     _store_dataset(tenant, system, actor, "current", "COMPAS current: 2014 (tool, v1 and v2 predictions)", frames["current"],
                    date(2014, 1, 1), date(2014, 12, 31), config, note, "compas_current.csv", is_real_data=True)
     return system
+
+
+# ------------------------------------------------------------------------------ completed audits
+def seed_audit_runs(tenant, actor: Membership, system: m.AISystem, versions: tuple) -> list:
+    """Run real audits on the stored sample datasets (idempotent per system and model version).
+
+    Results are computed by the normal audit engine from the stored data; nothing is pre-written.
+    """
+    from django.utils import timezone
+
+    from apps.ai_audit.services import runner
+
+    done = []
+    for label in versions:
+        mv = m.ModelVersion.all_objects.filter(system=system, version_label=label).first()
+        if mv is None or m.AuditRun.all_objects.filter(system=system, model_version=mv, status="completed").exists():
+            continue
+        tag = f"({label} "
+        tag2 = f"({label},"
+        def pick(role):
+            sets = list(m.Dataset.all_objects.filter(system=system, role=role, is_sample=True).order_by("created_at"))
+            tagged = [d for d in sets if tag in d.name or tag2 in d.name]
+            # A dataset shared by every model version (e.g. COMPAS holds tool, v1 and v2 predictions) has one entry.
+            return tagged[0] if tagged else (sets[0] if len(sets) == 1 else None)
+
+        ref, cur = pick("reference"), pick("current")
+        if ref is None or not ref.sample_config:
+            continue
+        stored = ref.sample_config
+        cfg = dict((stored.get("by_version") or {}).get(label) or stored)
+        if system.system_type == "tabular":
+            cfg["favourable_label"] = cfg.get("favourable_label") or mv.favourable_label
+        run = m.AuditRun.all_objects.create(
+            tenant=tenant, system=system, model_version=mv, reference_dataset=ref, current_dataset=cur, config=cfg,
+            status="running", started_at=timezone.now(), heartbeat_at=timezone.now(), created_by=actor, progress=1, progress_message="Starting",
+        )
+        runner.execute(run.id)
+        done.append(run)
+    return done
