@@ -13,22 +13,24 @@
 3. Open http://localhost:3000.
 4. Log in. Password for all: `Demo-Pass-2026`.
 
-   | Login | Role | Use for |
+   | Login | Person and role | Use for |
    |---|---|---|
-   | `admin@hirelens.example` | Tenant admin | Setup, reassigning owners |
-   | `founder@hirelens.example` | Risk owner (Asha Rao, ML lead) | Owns the systems, submits fixes |
-   | `advisor@hirelens.example` | Compliance officer (Vikram Shah) | Reviews and resolves |
+   | `priya.nair@hirelens.example` | Priya Nair, compliance officer | Assigns findings, approves fixes and reports |
+   | `rohan.mehta@hirelens.example` | Rohan Mehta, risk owner | Fixes findings, attaches evidence, submits; generates reports |
+   | `ananya.iyer@hirelens.example` | Ananya Iyer, auditor | Reads and comments only |
+   | `admin@hirelens.example` | Tenant admin | Setup only (loading samples, settings) |
 
-   Only mention `priya.nair@`, `rohan.mehta@` or `ananya.iyer@hirelens.example` if they appear in the app. They were not present in this branch.
-5. Use two browser windows (or one normal and one private) so you can switch between founder and advisor without logging out.
+   Also seeded, not needed for the story: `founder@` (risk owner) and `advisor@hirelens.example` (compliance officer). All people are synthetic.
+5. Use separate browser windows (normal, private, second profile) for Priya, Rohan and Ananya so you can switch without logging out.
 6. Check AI Systems shows both systems: COMPAS (real data) and FinSum (sample). If a system is missing, use its Load button on the AI Systems page.
 
 ## Rehearse once (do not skip)
 
 - Run one COMPAS audit with model `v1` to completion. Note the run time and the numbers on the Bias tab. This document does not quote numbers because they were not captured before writing. Write them on a card.
 - Run `v2` with the same settings. Open Reports and use Compare.
-- Note that a fresh seed has no findings until an audit has run. Do the rehearsal on a throw-away database or accept that it leaves findings in place.
-- Check the findings step: submit as founder, resolve as advisor.
+- The seed runs real audits, so findings exist from the start. Rehearsal steps change their state; do the rehearsal on a throw-away database or accept that it leaves changes in place.
+- Check the findings step: Priya assigns to Rohan, Rohan submits, Rohan's approve is refused, Priya approves.
+- Check the report step: Rohan generates and submits a report from a completed COMPAS audit, Priya approves.
 
 ## What to open first
 
@@ -43,7 +45,7 @@
 |---|---|
 | COMPAS download fails (no internet) | The seed falls back to the synthetic HireLens set. Start with `.\run-dev.ps1 -Offline` and say the data is synthetic. Or download `compas-scores-two-years.csv` from ProPublica's GitHub repo and run the seed with `--compas-file`. |
 | Audit run is slow or stuck on "queued" | The worker is not running. Check `.run\worker.log`. Restart `run-dev.ps1`. Meanwhile show a previously completed run from the Audits list. |
-| Login fails | Re-run the seed: `cd backend; uv run python manage.py seed_ai_demo --password "Demo-Pass-2026"` |
+| Login fails | Re-run the seeds: `cd backend; uv run python manage.py seed_ai_demo --password "Demo-Pass-2026"; uv run python manage.py seed_demo_team --password "Demo-Pass-2026"; uv run python manage.py seed_demo_controls` |
 | A page shows an error | Refresh once. Check `.run\api.log`. Move on and describe the page from `PITCH.md`. |
 | Cloud Security or Packet Traversal is empty | Use the page's demo-data button (admin only). If it is disabled, skip and say these two pages are simulations. |
 | Port in use | Run with other ports, for example `.\run-dev.ps1 -ApiPort 8100 -WebPort 3100`. |

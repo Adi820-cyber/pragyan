@@ -36,20 +36,22 @@ Say it slowly. The last line is your answer to "what about our data?".
 
 ## Part 3. The 3-minute demo script
 
-Setup: logged in as `founder@hirelens.example`, the COMPAS system open. Tab 2 is the Reports page. See `DEMO-CHECKLIST.md`.
+Setup: three browser windows (normal, private, second profile). Window 1: `priya.nair@hirelens.example` (Priya Nair, compliance officer) on the Overview page. Window 2: `rohan.mehta@hirelens.example` (Rohan Mehta, risk owner) on Findings & Actions. Window 3 (optional): `ananya.iyer@hirelens.example` (Ananya Iyer, auditor). `admin@hirelens.example` is only for setup. All passwords `Demo-Pass-2026`. The team is synthetic. See `DEMO-CHECKLIST.md`.
 
-| Time | Do | Say |
-|---|---|---|
-| 0:00 | Overview page | "This is the home screen for a compliance officer. It shows open findings, items waiting for review, overdue work and control gaps." |
-| 0:20 | AI Systems, open COMPAS | "This is real data. ProPublica published scores a real bail-risk tool gave to real defendants in Florida, plus what happened two years later. Names and birth dates are removed on load." |
-| 0:40 | Audits, New audit, pick COMPAS model `v1`, walk through the steps quickly | "Five steps. I pick the data, say which column is the prediction, which is the real outcome, and which groups to compare. Reskure never guesses sensitive columns for me." |
-| 1:10 | Run it. Open Bias tab | "Here is the result. It compares how often each group gets the good outcome. A flag means the gap is above the limit we set. Those limits are shown on screen and are screening limits, not legal tests." |
-| 1:50 | Findings & Actions | "Each problem is a finding with a plain-language explanation and a suggested next step. I give it an owner and a due date." |
-| 2:15 | Sign in as `advisor@hirelens.example` (second window) | "The person who owns a finding cannot approve it. A second person, here the external advisor, reviews it. The system blocks self-approval." |
-| 2:40 | Reports page, open the report | "The report is frozen at the moment of the audit. It lists dataset fingerprints, settings and software versions, so a reviewer can check it later." |
-| 2:55 | Close | "Fair, private, explainable, with proof. For small teams." |
+| Time | Who | Do | Say |
+|---|---|---|---|
+| 0:00 | Priya | Overview page | "This is the home screen for a compliance officer. Open findings, unassigned work, items waiting for my review, control gaps, high-risk vendors and open data requests. Every number links to its page." |
+| 0:20 | Priya | AI Systems, open COMPAS | "This is real data. ProPublica published scores a real bail-risk tool gave to real defendants in Florida, plus what happened two years later. Names and birth dates are removed on load." |
+| 0:40 | Priya | Audits, New audit, pick COMPAS model `v1`, accept the pre-filled steps, Run | "Five steps. I pick the data, the prediction column, the real outcome and the groups to compare. Reskure never guesses sensitive columns for me." |
+| 1:00 | Priya | Open a completed COMPAS audit, Bias tab | "It compares how often each group gets the good outcome. A flag means the gap is above the limit shown on screen. These are screening limits, not legal tests." |
+| 1:30 | Priya | Findings & Actions, open an unassigned bias finding, Assign to Rohan with a due date and priority | "Each problem becomes a finding. I assign it to the person who will fix it. Every step lands on the timeline." |
+| 1:50 | Rohan | Window 2, open the same finding, Start, attach an evidence link, Submit for review with a note | "Rohan does the fix and attaches evidence. He cannot approve his own work: the approve button is not his, and the server returns a refusal if he tries." |
+| 2:10 | Ananya | Window 3 (optional), add a comment | "Ananya is an auditor. She can read and comment, nothing more." |
+| 2:20 | Priya | Window 1, refresh, Approve (resolve) with a comment | "A different person approves. Nobody marks their own homework." |
+| 2:35 | Rohan, then Priya | Reports: Rohan generates a report from the completed COMPAS audit and submits it; Priya approves it | "The report is frozen and versioned with a SHA-256 fingerprint we can re-check. The person who generated it cannot approve it." |
+| 2:55 | Priya | Close | "Fair, private, explainable, with proof. For small teams." |
 
-If time is tight, drop the second login and describe it in one sentence.
+If time is tight, skip Ananya and the report approval, and say each in one sentence. The seed already leaves one finding in each state (in progress, overdue, ready for review, closed) so you can show the timeline without doing every step live.
 
 ---
 
@@ -180,7 +182,7 @@ Separation of duties is enforced in the server: the person who owns or submitted
 
 **Demo.** Open a bias finding. Assign it to the ML lead with a due date. Submit with a comment. Then switch to the advisor and resolve it. Try to resolve it as the owner and show the block. Say: "Nobody marks their own homework."
 
-**Real or not.** REAL workflow. Roles in the demo: admin (tenant admin), founder (risk owner), advisor (compliance officer), all synthetic users. Extra team members (Priya, Rohan, Ananya) were not present in the code or app when this was written. If they are present when you demo, call it the planned multi-user flow.
+**Real or not.** REAL workflow, synthetic people. Demo team: Priya Nair (compliance officer: assigns and approves), Rohan Mehta (risk owner: fixes, attaches evidence, submits), Ananya Iyer (auditor: reads and comments only), admin (tenant admin: setup). The `seed_demo_team` command puts four real audit findings into different states (in progress, overdue, ready for review, closed) with a timeline; the rest stay unassigned. Checked on this branch: Rohan gets a 403 when he tries to approve, Ananya gets a 403 when she tries to assign.
 
 ### 5.8 Privacy & Controls
 
@@ -200,7 +202,9 @@ Separation of duties is enforced in the server: the person who owns or submitted
 
 **Demo.** Open a report, scroll to the dataset fingerprints, then use Compare to show the effect of a fix. Say: "A reviewer can check that the data in front of them is the data we audited."
 
-**Real or not.** REAL. Important limit: the report is NOT cryptographically signed and has no single report-level hash. The tamper-evidence we have is the frozen snapshot and the SHA-256 hashes of datasets and evidence. Do not say "digitally signed". Say "frozen and fingerprinted". Compare shows "no longer raised" but does not auto-close the finding, by design.
+**Versioned reports.** From a completed audit, a user can generate a frozen report version (v1, v2, ...). It moves draft, in review, approved. The approver must be a different person from whoever generated or submitted it (enforced in the server). Each version stores a SHA-256 fingerprint of its snapshot; "Verify" recomputes it and checks it against the stored measurements. Exports: HTML and Markdown.
+
+**Real or not.** REAL. Important limit: the report is NOT cryptographically signed. The tamper-evidence is the frozen snapshot, its SHA-256 fingerprint, and the SHA-256 hashes of datasets and evidence. Do not say "digitally signed". Say "frozen and fingerprinted". Compare shows "no longer raised" but does not auto-close the finding, by design.
 
 ---
 
@@ -211,7 +215,7 @@ Use this as the centre of the 3-minute and 7-minute versions.
 1. Open AI Systems, COMPAS. "This is the real COMPAS data. It is the case ProPublica reported on."
 2. Audits, New audit. Choose model `v1`, groups race and sex, prediction column `pred_v1`, outcome column `no_two_year_recid`, favourable value 1 (these are pre-filled). Run.
 3. Open the Bias tab and read what the screen shows. Explain in one sentence each: the outcome gap (do groups get the good result equally?), the ratio (lowest divided by highest, below 0.80 is flagged) and equalized odds (are mistakes spread equally?). Read the actual numbers off the screen. ProPublica's published finding was that Black defendants were wrongly labelled high risk more often. Your own screen should show a group gap. If it does not, say what it shows.
-4. Findings & Actions. Open the bias finding. Give it an owner and due date. Start remediation and submit with a comment. In the second window, as the advisor, resolve or send back.
+4. Findings & Actions. As Priya, open the bias finding and assign it to Rohan with a due date. As Rohan, start remediation, attach evidence and submit with a comment. As Priya, resolve or send back.
 5. The fix. COMPAS model `v2` was retrained without sex and prior arrests. Run a second audit on `v2` with the same data.
 6. Reports, open the `v1` run, use Compare against the `v2` run. Show which findings are no longer raised and which remain. Say: "Some gaps stay, because the data carries them. We show that too."
 7. Controls and report. Open the report. Show data fingerprints, the frozen snapshot, and the control checklist. For DPDP/GDPR mapping, show FinSum, or switch on jurisdictions for COMPAS in settings.
@@ -248,6 +252,7 @@ What is not in this story: automatic closing of a finding by a re-audit, and a d
 - The CISO Assistant shows a shipped starter baseline until edited.
 - FinSum and HireLens are synthetic. COMPAS is real, but it is a US example from 2013-2014 and not Indian data.
 - The report is frozen and hash-fingerprinted but not digitally signed.
+- The demo team (Priya, Rohan, Ananya) and the vendor and data-request registers are synthetic seed data.
 - Bias thresholds are screening defaults, not legal tests. Passing them does not prove compliance.
 - Past outcomes can themselves carry historical bias (the wizard warns about this).
 - Personal-data detection is heuristic.
