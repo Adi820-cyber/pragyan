@@ -3,28 +3,13 @@ from rest_framework import serializers
 from apps.ai_audit import models as m
 from apps.ai_audit.sample.registry import features_for, known_keys
 from apps.core.models import Membership
+from apps.core.serializers import TenantBoundSerializer
 
 JURISDICTIONS = {"DPDP", "GDPR"}
 
 
 def _name(member):
     return (member.full_name or member.email) if member else None
-
-
-class TenantBoundSerializer(serializers.ModelSerializer):
-    """Rejects related objects that belong to a different tenant than the caller."""
-
-    def _tenant_id(self):
-        request = self.context.get("request")
-        membership = getattr(request, "membership", None)
-        return membership.tenant_id if membership else None
-
-    def validate(self, attrs):
-        tenant_id = self._tenant_id()
-        for key, value in attrs.items():
-            if hasattr(value, "tenant_id") and str(value.tenant_id) != str(tenant_id):
-                raise serializers.ValidationError({key: "Not found."})
-        return attrs
 
 
 class AISystemSerializer(TenantBoundSerializer):

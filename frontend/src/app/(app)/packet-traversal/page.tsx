@@ -1,14 +1,17 @@
+import { PageShell } from "@/components/layout/PageShell";
 import { PacketTracerView } from "./PacketTracerView";
 
 export const metadata = {
-  title: "Packet Traversal & Cable Path Tracer | Reskure",
-  description: "NetBox-inspired recursive physical and logical data packet traversal engine for enterprise infrastructure and AI pipelines.",
+  title: "Network paths | Reskure",
+  description: "Trace how data travels across the cabling, firewalls and switches recorded for your AI infrastructure.",
 };
+
+export const dynamic = "force-dynamic";
 
 export default function PacketTraversalPage() {
   return (
-    <main id="main" className="flex-1 overflow-y-auto">
+    <PageShell title="Network paths" subtitle="Where data travels between the systems you audit, and where it could be blocked, cut or unencrypted">
       <PacketTracerView />
-    </main>
+    </PageShell>
   );
 }

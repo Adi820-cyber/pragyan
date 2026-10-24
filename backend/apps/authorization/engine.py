@@ -173,6 +173,10 @@ class PolicyEngine:
         fallback_role_map["COMPLIANCE_OFFICER"].append("ai.")
         fallback_role_map["RISK_OWNER"] += ["ai.read", "ai.create", "ai.update"]
         fallback_role_map["AUDITOR"].append("ai.read")
+        # Network topology: everyone with a role may look and trace; editing is for reviewers and administrators.
+        fallback_role_map["COMPLIANCE_OFFICER"].append("network.")
+        for _role in ("RISK_OWNER", "AUDITOR", "CONTRIBUTOR"):
+            fallback_role_map[_role].append("network.read")
         allowed_prefixes = fallback_role_map.get(actor_role, [])
         for prefix in allowed_prefixes:
             if permission_code.startswith(prefix):
