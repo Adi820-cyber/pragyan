@@ -173,7 +173,7 @@ def _compas_config(prediction: str, features: list[str]) -> dict:
     others = [p for p in ("pred_tool", "pred_v1", "pred_v2") if p != prediction]
     return {
         "prediction_column": prediction, "label_column": "no_two_year_recid", "favourable_label": "1",
-        "group_columns": ["race", "sex"], "id_columns": ["case_id"], "feature_columns": features,
+        "group_columns": ["race", "sex"], "id_columns": ["case_id", "screening_date"], "feature_columns": features,
         "excluded_columns": ["screening_date", "sex_male", "decile_score"] + others,
         "min_group_size": 30, "bootstrap": 300, "seed": 42,
     }
@@ -181,11 +181,6 @@ def _compas_config(prediction: str, features: list[str]) -> dict:
 
 def seed_compas(tenant, actor: Membership, compas_file: Optional[str] = None) -> m.AISystem:
     existing = m.AISystem.all_objects.filter(tenant=tenant, name=COMPAS_SYSTEM_NAME).first()
-    if existing:
-        return existing
-    path: Path = compas_data.ensure_file(compas_file)  # raises RealDataUnavailable with instructions
-    frames = compas_data.build_scenario(path)
-    reviewer = _find_reviewer(tenant, actor)
     base_features = ["age", "priors_count", "juv_fel_count", "juv_misd_count", "juv_other_count", "felony"]
     config = {
         "by_version": {
@@ -194,6 +189,13 @@ def seed_compas(tenant, actor: Membership, compas_file: Optional[str] = None) ->
             "v2": _compas_config("pred_v2", compas_data.FEATURES_V2),
         }
     }
+    if existing:
+        # Keep the stored wizard mapping current when the seed definition changes.
+        m.Dataset.all_objects.filter(system=existing, is_sample=True, is_real_data=True).update(sample_config=config)
+        return existing
+    path: Path = compas_data.ensure_file(compas_file)  # raises RealDataUnavailable with instructions
+    frames = compas_data.build_scenario(path)
+    reviewer = _find_reviewer(tenant, actor)
     system = m.AISystem.all_objects.create(
         tenant=tenant, name=COMPAS_SYSTEM_NAME, system_type="tabular",
         purpose="Estimate the risk that a defendant reoffends within two years. REAL PUBLIC DATA: ProPublica's COMPAS data for "

@@ -156,7 +156,13 @@ def validate_run_config(config: dict, ref: pd.DataFrame, cur: Optional[pd.DataFr
         # Outcome labels are optional on the current dataset (they often arrive late).
         cfg["label_missing_in_current"] = True
 
+    if pred and label and pred == label:
+        problems.append("The prediction column and the actual outcome column must be different columns.")
+
     groups = list(cfg.get("group_columns") or [])
+    clash = sorted(set(groups) & set(cfg.get("id_columns") or []))
+    if clash:
+        problems.append(f"Column(s) {', '.join(clash)} are marked both as a group to compare and as an identifier to exclude. Pick one.")
     for g in groups:
         need(g, "Group", ref, "reference")
     cfg["group_columns"] = groups
@@ -169,7 +175,9 @@ def validate_run_config(config: dict, ref: pd.DataFrame, cur: Optional[pd.DataFr
         values = {_as_label(v) for v in ref[pred].dropna().unique()}
         if cfg["favourable_label"] not in values:
             problems.append(
-                f"favourable_label '{cfg['favourable_label']}' never appears in '{pred}'. Values seen: {sorted(values)[:10]}."
+                f"The favourable value '{cfg['favourable_label']}' never appears in the prediction column '{pred}'. "
+                f"That column holds: {', '.join(sorted(values)[:6])}{' ...' if len(values) > 6 else ''}. "
+                "Pick a column of model decisions and one of its values."
             )
 
     id_cols = list(cfg.get("id_columns") or [])
@@ -198,8 +206,8 @@ def validate_run_config(config: dict, ref: pd.DataFrame, cur: Optional[pd.DataFr
                 distinct = frame[col].dropna().nunique()
                 if distinct > 2:
                     problems.append(
-                        f"{label_name} column '{col}' has {distinct} distinct values in the {where} dataset. "
-                        "Only binary (two-outcome) predictions are supported; multi-class results are not audited."
+                        f"{label_name} column '{col}' has {distinct} different values in the {where} dataset, so it is not a "
+                        "yes/no column (multi-class results, identifiers and scores are not audited). Choose a column with exactly two outcomes."
                     )
 
     days = cfg.get("retention_days")

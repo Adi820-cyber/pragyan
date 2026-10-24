@@ -6,6 +6,7 @@ import { call, errText } from "@/lib/client/api";
 import { StateBadge } from "@/components/ui/StateBadge";
 import { Field, buttonClass, ghostButtonClass, inputClass } from "@/components/ui/Panel";
 import { CATEGORY_LABEL } from "@/lib/format";
+import { guessColumns, mappingProblem } from "@/lib/columnGuess";
 import type { AISystem, AuditRun, Category, Dataset, ModelVersion, RunConfig, RunPreview } from "@/lib/types";
 
 const STEPS = ["Choose inputs", "Map columns", "Check the data", "Set the policy", "Run"];
@@ -96,6 +97,26 @@ export function NewAuditWizard({
   const [busy, setBusy] = useState(false);
 
   const columns = ref?.column_schema.map((c) => c.name) ?? [];
+
+  // Default mapping, applied once per (reference dataset, model version): the dataset's stored sample mapping for sample
+  // data, otherwise a conservative guess that never picks identifier-like or high-cardinality columns.
+  const mappingKey = ref ? `${ref.id}:${version?.id ?? ""}` : "";
+  const [mappedFor, setMappedFor] = useState("");
+  if (ref && mappingKey !== mappedFor) {
+    setMappedFor(mappingKey);
+    if (ref.is_sample && ref.suggested_config) {
+      applySample();
+    } else {
+      const g = guessColumns(ref.column_schema, ref.row_count);
+      setPrediction(g.prediction);
+      setLabel(g.label);
+      setGroups(g.groups);
+      setIdCols(g.ids);
+      setFavourable(version?.favourable_label ?? "1");
+      setLlmCols({});
+    }
+  }
+  const problem = isLlm || !ref ? null : mappingProblem(ref.column_schema, prediction, label, groups, idCols);
 
   const activeChecks = checks.filter((c) => (isLlm ? c !== "explainability" : c !== "grounding"));
 
@@ -242,10 +263,12 @@ export function NewAuditWizard({
 
         {step === 1 && ref && (
           <>
-            {ref.suggested_config && (
+            {ref.is_sample && ref.suggested_config && (
               <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
-                <p className="text-xs text-amber-100">This is the synthetic sample, so the column mapping can be filled in for you.</p>
-                <button type="button" onClick={applySample} className={ghostButtonClass}>Use sample mapping</button>
+                <p className="text-xs text-amber-100">
+                  {ref.is_real_data ? "Real public data (ProPublica COMPAS)." : "Synthetic demo data."} The column mapping below was filled in from this dataset&apos;s stored sample mapping.
+                </p>
+                <button type="button" onClick={applySample} className={ghostButtonClass}>Reset to sample mapping</button>
               </div>
             )}
             {isLlm ? (
@@ -302,7 +325,7 @@ export function NewAuditWizard({
               <div className="flex flex-wrap gap-3">
                 {columns.filter((c) => c !== prediction && c !== label && !Object.values(llmCols).includes(c)).map((c) => (
                   <label key={c} className="flex items-center gap-1.5 text-xs text-slate-200">
-                    <input type="checkbox" checked={groups.includes(c)} onChange={() => toggle(groups, setGroups, c)} className="accent-cyan-500" /> {c}
+                    <input type="checkbox" checked={groups.includes(c)} onChange={() => { toggle(groups, setGroups, c); setIdCols(idCols.filter((x) => x !== c)); }} className="accent-cyan-500" /> {c}
                   </label>
                 ))}
               </div>
@@ -312,16 +335,16 @@ export function NewAuditWizard({
               <div className="flex flex-wrap gap-3 mt-2">
                 {columns.filter((c) => c !== prediction && c !== label).map((c) => (
                   <label key={c} className="flex items-center gap-1.5 text-xs text-slate-200">
-                    <input type="checkbox" checked={idCols.includes(c)} onChange={() => toggle(idCols, setIdCols, c)} className="accent-cyan-500" /> {c}
+                    <input type="checkbox" checked={idCols.includes(c)} onChange={() => { toggle(idCols, setIdCols, c); setGroups(groups.filter((x) => x !== c)); }} className="accent-cyan-500" /> {c}
                   </label>
                 ))}
               </div>
               <p className="text-[11px] text-slate-500 mt-2">{isLlm ? "Personal data in prompts, answers and source text is scanned and reported with values masked." : "All remaining columns are treated as model inputs. Columns that hold personal data and are not needed are flagged in the next step."}</p>
             </fieldset>
-            {problems && <p role="alert" className="text-xs text-rose-300 whitespace-pre-wrap">{problems}</p>}
+            {(problem || problems) && <p role="alert" className="text-xs text-rose-300 whitespace-pre-wrap">{problem ?? problems}</p>}
             <div className="flex gap-3">
               <button type="button" onClick={() => setStep(0)} className={ghostButtonClass}>Back</button>
-              <button type="button" disabled={(isLlm ? !llmCols.output : !prediction) || busy} onClick={runPreview} className={buttonClass}>{busy ? "Checking..." : "Check the data"}</button>
+              <button type="button" disabled={(isLlm ? !llmCols.output : !prediction) || Boolean(problem) || busy} onClick={runPreview} className={buttonClass}>{busy ? "Checking..." : "Check the data"}</button>
             </div>
           </>
         )}

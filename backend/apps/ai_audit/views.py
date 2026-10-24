@@ -220,7 +220,7 @@ class AuditRunViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.RetrieveModel
             else:
                 cfg = validate_run_config(cfg, frames["ref"], frames["cur"])
         except AuditInputError as exc:
-            raise ValidationError({"config": exc.problems})
+            raise ValidationError({"detail": exc.problems})
         return system, mv, ref, cur, cfg, frames
 
     @action(detail=False, methods=["POST"])
