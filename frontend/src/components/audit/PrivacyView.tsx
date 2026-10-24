@@ -9,6 +9,7 @@ export function PrivacyView({ results, systemId }: { results: CheckResult[]; sys
   if (results.length === 0) return <p className="text-sm text-slate-400">Privacy checks were not part of this run.</p>;
   const indicators = results.filter((r) => r.metric === "pii_column");
   const rest = results.filter((r) => r.metric !== "pii_column");
+  const text = results.filter((r) => r.metric === "pii_text_rows" && r.state === "review_required");
 
   return (
     <div className="space-y-6">
@@ -47,6 +48,12 @@ export function PrivacyView({ results, systemId }: { results: CheckResult[]; sys
         </div>
       )}
 
+      {text.length > 0 && (
+        <p className="text-xs text-amber-100 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+          Personal data was found inside the text of prompts, answers or source documents. Where an answer shows data that was not in the prompt or source,
+          the system surfaced it on its own, which is the most serious case. Examples are masked.
+        </p>
+      )}
       <div className="grid lg:grid-cols-2 gap-4">{rest.map((r) => <ResultCard key={r.id} r={r} />)}</div>
 
       <div className="rounded-lg border border-white/10 bg-slate-900/50 p-4 text-sm text-slate-200">

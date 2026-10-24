@@ -40,7 +40,7 @@ export async function call<T = unknown>(
     cache: "no-store",
   });
   if (response.status === 401) {
-    window.location.href = "/login";
+    window.location.assign("/login");
     throw new ClientApiError(401, "Your session has ended. Please sign in again.");
   }
   const text = await response.text();

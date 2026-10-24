@@ -26,6 +26,7 @@ export function SystemSettings({ system, people }: { system: AISystem; people: P
         automated_decision: f.get("automated_decision") === "on",
         processes_children_data: f.get("children") === "on",
         is_significant_data_fiduciary: f.get("sdf") === "on",
+        requires_citations: system.system_type === "llm" && f.get("citations") === "on",
       });
       setSaved(true);
       router.refresh();
@@ -57,6 +58,9 @@ export function SystemSettings({ system, people }: { system: AISystem; people: P
         <label className="flex items-center gap-2 text-sm text-slate-200"><input type="checkbox" name="j_DPDP" defaultChecked={system.jurisdictions.includes("DPDP")} className={check} /> India DPDP checklist</label>
         <label className="flex items-center gap-2 text-sm text-slate-200"><input type="checkbox" name="j_GDPR" defaultChecked={system.jurisdictions.includes("GDPR")} className={check} /> EU GDPR checklist</label>
         <label className="flex items-center gap-2 text-sm text-slate-200"><input type="checkbox" name="automated_decision" defaultChecked={system.automated_decision} className={check} /> Makes or drives decisions about people</label>
+        {system.system_type === "llm" && (
+          <label className="flex items-center gap-2 text-sm text-slate-200"><input type="checkbox" name="citations" defaultChecked={system.requires_citations} className={check} /> Answers must cite their sources</label>
+        )}
         <label className="flex items-center gap-2 text-sm text-slate-200"><input type="checkbox" name="children" defaultChecked={system.processes_children_data} className={check} /> Processes data of under-18s</label>
         <label className="flex items-center gap-2 text-sm text-slate-200"><input type="checkbox" name="sdf" defaultChecked={system.is_significant_data_fiduciary} className={check} /> Notified Significant Data Fiduciary</label>
       </div>

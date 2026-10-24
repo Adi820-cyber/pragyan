@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { call, errText } from "@/lib/client/api";
 import { Field, buttonClass, inputClass } from "@/components/ui/Panel";
 
-export function DatasetUpload({ systemId }: { systemId: string }) {
+export function DatasetUpload({ systemId, systemType }: { systemId: string; systemType: "llm" | "tabular" }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,8 +43,8 @@ export function DatasetUpload({ systemId }: { systemId: string }) {
             <option value="current">Current</option>
           </select>
         </Field>
-        <Field label="CSV file" htmlFor="ds_file" hint="UTF-8, one header row, up to 20 MB.">
-          <input id="ds_file" name="file" type="file" accept=".csv,text/csv" required className={`${inputClass} file:mr-3 file:rounded file:border-0 file:bg-slate-700 file:px-2 file:py-1 file:text-xs file:text-white`} />
+        <Field label="File" htmlFor="ds_file" hint="CSV, or JSONL with one JSON object per line. UTF-8, up to 20 MB.">
+          <input id="ds_file" name="file" type="file" accept=".csv,.jsonl,.ndjson,text/csv" required className={`${inputClass} file:mr-3 file:rounded file:border-0 file:bg-slate-700 file:px-2 file:py-1 file:text-xs file:text-white`} />
         </Field>
       </div>
       <div className="grid md:grid-cols-3 gap-4">
@@ -59,8 +59,9 @@ export function DatasetUpload({ systemId }: { systemId: string }) {
         </Field>
       </div>
       <p className="text-xs text-slate-400">
-        Include a column of model predictions. Add actual outcomes if you have them. Remove direct identifiers you do not need: the privacy scan will flag what it
-        finds.
+        {systemType === "llm"
+          ? "Include the prompt and the system\u0027s answer for each interaction. Add the source text it was given, a quality score, and whether a person reviewed or changed the answer if you have them. Remove direct identifiers you do not need: the privacy scan reports what it finds, with values masked."
+          : "Include a column of model predictions. Add actual outcomes if you have them. Remove direct identifiers you do not need: the privacy scan will flag what it finds."}
       </p>
       {error && (
         <p role="alert" className="text-xs text-rose-300">

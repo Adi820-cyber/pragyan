@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 
 type ReportLite = {
   coverage: Record<string, { status: string; counts: Record<string, number> }>;
-  datasets: { is_sample: boolean }[];
+  datasets: { is_sample: boolean; is_real_data: boolean; source_note: string }[];
 };
 
 export default async function AuditDetailPage({ params }: PageProps<"/audits/[id]">) {
@@ -58,7 +58,11 @@ export default async function AuditDetailPage({ params }: PageProps<"/audits/[id
     <PageShell
       title={title}
       subtitle={`Finished ${dateTime(run.finished_at)} · reference "${run.reference_dataset_name}"${run.current_dataset_name ? ` · current "${run.current_dataset_name}"` : ""}`}
-      sample={report?.datasets.some((d) => d.is_sample)}
+      sample={report?.datasets.some((d) => d.is_sample && !d.is_real_data)}
+      realData={(() => {
+        const real = report?.datasets.find((d) => d.is_real_data);
+        return real ? { source: real.source_note } : false;
+      })()}
       actions={
         <Link href={`/reports/${run.id}`} className={ghostButtonClass}>
           <FileText className="w-4 h-4" aria-hidden="true" />
@@ -78,8 +82,12 @@ export default async function AuditDetailPage({ params }: PageProps<"/audits/[id
       <Panel title="How this run was configured">
         <dl className="grid md:grid-cols-2 gap-3 text-xs">
           <div>
-            <dt className="text-slate-400">Prediction / outcome / favourable value</dt>
-            <dd className="text-slate-200">{run.config.prediction_column} / {run.config.label_column ?? "none"} / {run.config.favourable_label}</dd>
+            <dt className="text-slate-400">{run.config.system_type === "llm" ? "Answer / prompt / source columns" : "Prediction / outcome / favourable value"}</dt>
+            <dd className="text-slate-200">
+              {run.config.system_type === "llm"
+                ? `${run.config.output_column ?? "none"} / ${run.config.prompt_column ?? "none"} / ${run.config.context_column ?? "none"}`
+                : `${run.config.prediction_column} / ${run.config.label_column ?? "none"} / ${run.config.favourable_label}`}
+            </dd>
           </div>
           <div>
             <dt className="text-slate-400">Groups compared</dt>

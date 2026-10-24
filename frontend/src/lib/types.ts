@@ -95,7 +95,8 @@ export interface AccessDecisionLog {
 // ---------------------------------------------------------------------------
 // Responsible AI audit
 // ---------------------------------------------------------------------------
-export type Category = "bias" | "drift" | "explainability" | "privacy";
+export type Category = "bias" | "drift" | "explainability" | "grounding" | "privacy" | "governance";
+export type SystemType = "llm" | "tabular";
 export type ResultState = "no_alert" | "review_required" | "insufficient_evidence" | "not_applicable" | "error";
 export type CoverageStatus = "assessed" | "review_required" | "not_assessed" | "error";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
@@ -141,6 +142,8 @@ export interface AISystem {
   automated_decision: boolean;
   processes_children_data: boolean;
   is_significant_data_fiduciary: boolean;
+  system_type: SystemType;
+  requires_citations: boolean;
   status: string;
   latest_run: { id: string; status: RunStatus; finished_at: string | null; model_version: string } | null;
   open_findings: number;
@@ -151,9 +154,12 @@ export interface ModelVersion {
   system: string;
   system_name: string;
   version_label: string;
-  source: "server_sample" | "local_bundle" | "predictions_only";
+  source: "server_sample" | "local_bundle" | "predictions_only" | "llm_hosted" | "llm_self_hosted";
   sample_key: string;
   model_type: string;
+  provider: string;
+  model_name: string;
+  prompt_version: string;
   feature_columns: string[];
   favourable_label: string;
   notes: string;
@@ -191,15 +197,26 @@ export interface Dataset {
   period_start: string | null;
   period_end: string | null;
   is_sample: boolean;
+  is_real_data: boolean;
+  source_note: string;
   created_at: string;
-  suggested_config: Record<string, unknown> | null;
+  suggested_config: (Partial<RunConfig> & { by_version?: Record<string, Partial<RunConfig>> }) | null;
 }
 
 export interface RunConfig {
-  prediction_column: string;
+  prediction_column?: string;
+  prompt_column?: string | null;
+  output_column?: string | null;
+  context_column?: string | null;
+  score_column?: string | null;
+  citations_column?: string | null;
+  human_reviewed_column?: string | null;
+  human_override_column?: string | null;
+  require_citations?: boolean;
+  system_type?: SystemType;
   label_column?: string | null;
   group_columns: string[];
-  favourable_label: string;
+  favourable_label?: string;
   id_columns?: string[];
   feature_columns?: string[];
   min_group_size?: number;
@@ -337,7 +354,7 @@ export interface Overview {
     name: string;
     latest_run_id: string | null;
     latest_run_at: string | null;
-    coverage: Record<Category, { status: CoverageStatus; status_label: string; counts: Partial<Record<ResultState, number>> }> | null;
+    coverage: Partial<Record<Category, { status: CoverageStatus; status_label: string; counts: Partial<Record<ResultState, number>> }>> | null;
     open_findings: number;
     control_gaps: number;
   }[];
@@ -350,9 +367,11 @@ export interface Overview {
     active_runs: number;
   };
   sample_mode: boolean;
+  real_data_mode: boolean;
 }
 
 export interface RunPreview {
+  system_type: SystemType;
   config: RunConfig;
   available_checks: Record<Category, { available: boolean; reason: string; error_rates?: boolean }>;
   data_quality: Record<string, { rows: number; columns: number; columns_with_missing: Record<string, number> }>;
@@ -379,4 +398,45 @@ export interface RunDiff {
     persisting: { base: { title: string; status: string }; other: { title: string; status: string } }[];
   };
   note: string;
+}
+
+export interface Dependency {
+  id: string;
+  system: string;
+  name: string;
+  service: string;
+  role: "model_provider" | "cloud" | "data_labelling" | "analytics" | "other";
+  personal_data_shared: boolean;
+  data_categories: string[];
+  region: string;
+  outside_india: boolean;
+  outside_eea: boolean;
+  transfer_mechanism: string;
+  contract_in_place: boolean;
+  contract_reviewed_on: string | null;
+  trains_on_customer_data: "yes" | "no" | "unknown";
+  retention_days: number | null;
+  subprocessors_listed: boolean;
+  exit_plan: boolean;
+  criticality: "low" | "medium" | "high";
+  last_reviewed: string | null;
+  notes: string;
+}
+
+export type RightKey = "access" | "correction" | "erasure" | "withdraw_consent" | "grievance" | "human_review";
+
+export interface RightsProcess {
+  id: string;
+  system: string;
+  right: RightKey;
+  right_label: string;
+  procedure_exists: boolean;
+  owner: string | null;
+  owner_name: string | null;
+  channel: string;
+  sla_days: number | null;
+  last_tested: string | null;
+  requests_12m: number;
+  closed_on_time_12m: number;
+  evidence_note: string;
 }

@@ -37,6 +37,7 @@ export default async function OverviewPage() {
       title="Overview"
       subtitle="What has been checked, what needs review, and what is still open"
       sample={data?.sample_mode}
+      realData={data?.real_data_mode ? { source: "The COMPAS example uses ProPublica data from Broward County, Florida (2013-2014)." } : false}
       actions={
         <Link href="/audits/new" className={buttonClass}>
           <Plus className="w-4 h-4" aria-hidden="true" />
@@ -67,10 +68,10 @@ export default async function OverviewPage() {
           {data.systems.length === 0 ? (
             <EmptyState title="No AI systems yet">
               <p className="mb-4">
-                Register the system you want to check, or load the synthetic HireLens example to see a complete audit without using real data.
+                Register the system you want to check, or load an example: a synthetic LLM assistant log, or real public data from a deployed risk-scoring tool.
               </p>
               <div className="flex items-center justify-center gap-3">
-                <LoadSampleButton />
+                <div className="flex flex-wrap items-center justify-center gap-3"><LoadSampleButton scenario="finsum" /><LoadSampleButton scenario="compas" /></div>
                 <Link href="/systems" className="text-xs text-cyan-300 hover:text-cyan-200 underline">
                   Register a system
                 </Link>

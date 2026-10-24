@@ -11,7 +11,8 @@ from django.utils import timezone
 
 from apps.ai_audit.models import AuditRun, CheckResult, ExplanationBundle, Finding, FindingEvent
 from apps.ai_audit.services import controls as controls_service
-from apps.ai_audit.services import drift, explain, fairness, privacy
+from apps.ai_audit.services import drift, explain, fairness, governance, llm, privacy
+from apps.ai_audit.services.report import snapshot_context
 from apps.ai_audit.services.common import (
     DEFAULT_THRESHOLDS,
     ERROR,
@@ -20,9 +21,11 @@ from apps.ai_audit.services.common import (
     THRESHOLD_RATIONALE,
     Result,
 )
-from apps.ai_audit.services.validation import AuditInputError, load_csv, validate_run_config
+from apps.ai_audit.services.validation import AuditInputError, load_csv, validate_llm_config, validate_run_config
 
-ALL_CHECKS = ["bias", "drift", "explainability", "privacy"]
+TABULAR_CHECKS = ["bias", "drift", "explainability", "privacy", "governance"]
+LLM_CHECKS = ["bias", "drift", "grounding", "privacy", "governance"]
+ALL_CHECKS = sorted(set(TABULAR_CHECKS) | set(LLM_CHECKS))
 
 
 class RunCancelled(Exception):
@@ -43,6 +46,18 @@ NEXT_STEPS = {
     ("privacy", "personal_data_indicators"): "Confirm what the column holds. Remove it from data shared for audit and from model inputs unless it is necessary and justified.",
     ("privacy", "minimisation"): "Document why each personal field is necessary, or remove it from the model inputs.",
     ("privacy", "retention"): "Delete rows past the retention period or record the reason to keep them.",
+    ("privacy", "personal_data_in_text"): "Stop personal data entering prompts where it is not needed, and add output filtering. Confirm the vendor contract covers what is sent.",
+    ("bias", "refusal_gap"): "Read a sample of refused requests from each group. Check whether the system treats similar requests differently.",
+    ("bias", "response_length_gap"): "Compare answers to equivalent questions across groups. Look for less help being given to one group.",
+    ("bias", "score_gap"): "Check how scores are produced. If a judge model or reviewer scored these, test the judge for the same gap.",
+    ("grounding", "groundedness"): "Read the lowest-overlap outputs against their sources. Tighten retrieval or instructions so answers stay within the sources.",
+    ("grounding", "unsupported_numbers"): "Check each flagged figure against the original document before any report is released.",
+    ("grounding", "citations"): "Require the system to cite a source for each claim, and reject outputs that do not.",
+    ("governance", "human_oversight"): "Decide what level of human review fits the risk, and make sure reviewers have time and authority to reject outputs.",
+    ("governance", "vendor_dependency"): "Fix each gap with the vendor: sign data processing terms, confirm training and retention settings, and record an exit plan.",
+    ("governance", "vendor_register"): "List every vendor, cloud service and model provider this system depends on, and what data each receives.",
+    ("governance", "vendor_concentration"): "Record a fallback: a second provider, a self-hosted option, or a tested way to export your data and prompts.",
+    ("governance", "data_rights"): "Set up the procedure, name an owner, publish the request channel and test it with a sample request.",
 }
 
 
@@ -113,11 +128,16 @@ def execute(run_id) -> None:
         ref = _read_dataset(run.reference_dataset)
         cur = _read_dataset(run.current_dataset) if run.current_dataset_id else None
 
-        cfg = validate_run_config(run.config, ref, cur)
+        is_llm = run.system.system_type == "llm"
+        cfg = validate_llm_config(run.config, ref, cur) if is_llm else validate_run_config(run.config, ref, cur)
         cfg.setdefault("thresholds", {})
         cfg["effective_thresholds"] = {**DEFAULT_THRESHOLDS, **{k: float(v) for k, v in cfg["thresholds"].items() if k in DEFAULT_THRESHOLDS}}
         cfg.setdefault("thresholds_rationale", THRESHOLD_RATIONALE)
-        checks = [c for c in (cfg.get("checks") or ALL_CHECKS) if c in ALL_CHECKS]
+        cfg["system_type"] = run.system.system_type
+        if is_llm:
+            cfg["require_citations"] = bool(cfg.get("require_citations") or run.system.requires_citations)
+        allowed = LLM_CHECKS if is_llm else TABULAR_CHECKS
+        checks = [c for c in (cfg.get("checks") or allowed) if c in allowed]
         cfg["checks"] = checks
 
         packs = {pid: controls_service.load_pack(pid)["version"] for pid in controls_service.pack_ids_for_system(run.system)}
@@ -127,31 +147,41 @@ def execute(run_id) -> None:
 
         _guard(run_id, deadline)
         if "bias" in checks:
-            _touch(run_id, 20, "Checking group outcomes")
-            results += _safe("bias", "group_fairness", lambda: fairness.run_bias_checks(ref, cfg))
+            _touch(run_id, 20, "Checking gaps between groups")
+            results += _safe("bias", "group_fairness", lambda: llm.run_llm_bias(ref, cfg) if is_llm else fairness.run_bias_checks(ref, cfg))
 
         _guard(run_id, deadline)
         if "drift" in checks:
-            _touch(run_id, 45, "Comparing reference and current data")
+            _touch(run_id, 40, "Comparing reference and current data")
             if cur is None:
                 results.append(Result("drift", "comparison", "distribution_distance", NOT_APPLICABLE,
                                       summary="No current dataset was provided, so there is nothing to compare against the reference."))
             else:
-                results += _safe("drift", "comparison", lambda: drift.run_drift_checks(ref, cur, cfg))
+                results += _safe("drift", "comparison", lambda: llm.run_llm_drift(ref, cur, cfg) if is_llm else drift.run_drift_checks(ref, cur, cfg))
 
         _guard(run_id, deadline)
         if "explainability" in checks:
-            _touch(run_id, 65, "Computing explanations")
+            _touch(run_id, 55, "Computing explanations")
             results += _safe("explainability", "explanations", lambda: _explain(run, ref, cfg))
+        if "grounding" in checks:
+            _touch(run_id, 55, "Comparing outputs with their sources")
+            results += _safe("grounding", "groundedness", lambda: llm.run_llm_grounding(ref, cfg, "reference"))
+            if cur is not None:
+                results += _safe("grounding", "groundedness", lambda: llm.run_llm_grounding(cur, cfg, "current"))
 
         _guard(run_id, deadline)
         if "privacy" in checks:
-            _touch(run_id, 85, "Scanning for personal data")
+            _touch(run_id, 75, "Scanning for personal data")
             frames = {"reference": ref}
             if cur is not None:
                 frames["current"] = cur
-            results += _safe("privacy", "personal_data", lambda: privacy.run_privacy_checks(frames, cfg))
+            results += _safe("privacy", "personal_data",
+                             lambda: llm.run_llm_privacy(frames, cfg) if is_llm else privacy.run_privacy_checks(frames, cfg))
 
+        _guard(run_id, deadline)
+        if "governance" in checks:
+            _touch(run_id, 90, "Checking vendors, data rights and oversight")
+            results += _safe("governance", "vendors_rights", lambda: _governance(run, ref, cfg, is_llm))
         _guard(run_id, deadline)
         _persist(run, results)
     except RunCancelled:
@@ -163,6 +193,17 @@ def execute(run_id) -> None:
         AuditRun.all_objects.filter(id=run_id).update(
             status="failed", error=message[:2000], progress_message="Failed", finished_at=timezone.now()
         )
+
+
+def _governance(run: AuditRun, ref, cfg: dict, is_llm: bool) -> list[Result]:
+    system = run.system
+    deps = [governance.dependency_dict(d) for d in system.dependencies.all()]
+    procs = [governance.process_dict(p) for p in system.rights_processes.select_related("owner")]
+    out = governance.run_vendor_checks(deps, system.jurisdictions)
+    out += governance.run_rights_checks(procs, system.jurisdictions, system.automated_decision, cfg)
+    if is_llm:
+        out += llm.run_llm_oversight(ref, cfg)
+    return out
 
 
 def _explain(run: AuditRun, ref, cfg: dict) -> list[Result]:
@@ -186,6 +227,10 @@ def _explain(run: AuditRun, ref, cfg: dict) -> list[Result]:
 
 # --------------------------------------------------------------------------------------
 def _severity(result: Result) -> str:
+    if result.detail.get("high_severity") or result.detail.get("surfaced_rows"):
+        return "HIGH"
+    if result.category == "grounding" and result.check_key == "unsupported_numbers":
+        return "HIGH"
     if result.category == "privacy":
         if result.detail.get("confidence") == "likely":
             return "LOW"
@@ -198,7 +243,7 @@ def _severity(result: Result) -> str:
 
 
 def _group_key(r: Result) -> tuple:
-    if r.category in ("bias", "privacy") and r.check_key != "minimisation":
+    if r.category in ("bias", "privacy", "governance") and r.check_key != "minimisation":
         return (r.category, r.check_key, r.subject)
     return (r.category, r.check_key)
 
@@ -207,11 +252,15 @@ def _title(key: tuple, rows: list[Result]) -> str:
     cat, check = key[0], key[1]
     subject = key[2] if len(key) > 2 else ""
     if cat == "bias":
-        label = {"demographic_parity": "Outcome gap", "selection_rate_ratio": "Low selection-rate ratio", "equalized_odds": "Error-rate gap"}[check]
+        label = {
+            "demographic_parity": "Outcome gap", "selection_rate_ratio": "Low selection-rate ratio", "equalized_odds": "Error-rate gap",
+            "refusal_gap": "Refusal gap", "response_length_gap": "Answer-length gap", "score_gap": "Quality-score gap",
+        }.get(check, "Group gap")
         return f"{label} across {subject}"
     if cat == "drift":
         if check == "feature_distribution":
-            return f"Input data changed: {len(rows)} feature{'s' if len(rows) != 1 else ''}"
+            noun = "input" if rows and rows[0].detail.get("kind") != "text" else "text"
+            return f"Data changed: {len(rows)} measure{'s' if len(rows) != 1 else ''}"
         return {
             "prediction_distribution": "Model outputs shifted", "schema": "Data columns or types changed",
             "missingness": "Missing-value rate changed", "unseen_categories": "New category values appeared",
@@ -219,12 +268,28 @@ def _title(key: tuple, rows: list[Result]) -> str:
         }.get(check, "Data drift")
     if cat == "explainability":
         return "Influential feature may act as a proxy for a group"
+    if cat == "grounding":
+        return {"groundedness": "Outputs stray from their sources", "unsupported_numbers": "Figures not found in the sources",
+                "citations": "Outputs do not cite sources"}.get(check, "Grounding review")
     if cat == "privacy":
         if check == "personal_data_indicators":
             return f"Personal data in {subject.split(':', 1)[-1]}"
+        if check == "personal_data_in_text":
+            return f"Personal data in {subject.replace(':', ' ')}"
         return {"minimisation": "Personal data used as model input", "retention": "Data held past retention period"}.get(check, "Privacy review")
+    if cat == "governance":
+        if check == "vendor_dependency":
+            return f"Vendor gaps: {subject}"
+        if check == "vendor_register":
+            return "No vendors or processors recorded"
+        if check == "vendor_concentration":
+            return f"Single critical provider: {subject}"
+        if check == "data_rights":
+            from apps.ai_audit.services.governance import RIGHT_LABEL
+            return f"Data rights: {RIGHT_LABEL.get(subject, subject)}"
+        if check == "human_oversight":
+            return "Human oversight needs attention"
     return f"{cat} review"
-
 
 def _persist(run: AuditRun, results: list[Result]) -> None:
     with transaction.atomic():
@@ -263,5 +328,6 @@ def _persist(run: AuditRun, results: list[Result]) -> None:
                                             to_status="open", comment="Created from audit run.")
 
         AuditRun.all_objects.filter(id=run.id).update(
-            status="completed", progress=100, progress_message="Completed", finished_at=timezone.now(), error=""
+            status="completed", progress=100, progress_message="Completed", finished_at=timezone.now(), error="",
+            context_snapshot=snapshot_context(run),
         )

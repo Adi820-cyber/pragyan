@@ -4,12 +4,13 @@ Every rejection carries an actionable message. Nothing here fabricates a pass.
 """
 import csv
 import io
+import math
 from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
 
-from apps.ai_audit.services.common import CONTINUOUS_MIN_UNIQUE, DEFAULT_MIN_GROUP_SIZE
+from apps.ai_audit.services.common import CONTINUOUS_MIN_UNIQUE, DEFAULT_MIN_GROUP_SIZE, DEFAULT_THRESHOLDS
 
 
 class AuditInputError(ValueError):
@@ -102,6 +103,37 @@ def binary_indicator(series: pd.Series, favourable_label: str) -> pd.Series:
     return pd.Series(out, index=series.index)
 
 
+def _check_ints(cfg: dict, problems: list[str]) -> None:
+    for key, default, low, high in (("min_group_size", DEFAULT_MIN_GROUP_SIZE, 1, 1_000_000), ("bootstrap", 300, 0, 2000), ("seed", 42, 0, 2**31 - 1)):
+        try:
+            cfg[key] = int(cfg.get(key) if cfg.get(key) is not None else default)
+        except (TypeError, ValueError):
+            problems.append(f"{key} must be a whole number.")
+            cfg[key] = default
+        if not low <= cfg[key] <= high:
+            problems.append(f"{key} must be between {low} and {high}.")
+
+
+def _check_thresholds(cfg: dict, problems: list[str]) -> None:
+    clean_thresholds: dict[str, float] = {}
+    for key, value in (cfg.get("thresholds") or {}).items():
+        if key not in DEFAULT_THRESHOLDS:
+            problems.append(f"Unknown threshold '{key}'. Known thresholds: {sorted(DEFAULT_THRESHOLDS)}.")
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            problems.append(f"Threshold '{key}' must be a number.")
+            continue
+        # NaN and out-of-range values would silently switch alerts off, so they are rejected.
+        if not math.isfinite(number) or not 0 <= number <= 1:
+            problems.append(f"Threshold '{key}' must be a finite number between 0 and 1.")
+            continue
+        clean_thresholds[key] = number
+    cfg["thresholds"] = clean_thresholds
+
+
+
 def validate_run_config(config: dict, ref: pd.DataFrame, cur: Optional[pd.DataFrame]) -> dict:
     """Return a normalised config or raise AuditInputError listing every problem."""
     problems: list[str] = []
@@ -157,19 +189,31 @@ def validate_run_config(config: dict, ref: pd.DataFrame, cur: Optional[pd.DataFr
     cfg["id_columns"] = id_cols
     cfg["excluded_columns"] = sorted(excluded)
 
-    cfg["min_group_size"] = int(cfg.get("min_group_size") or DEFAULT_MIN_GROUP_SIZE)
-    if cfg["min_group_size"] < 1:
-        problems.append("min_group_size must be at least 1.")
-    cfg.setdefault("seed", 42)
-    cfg.setdefault("bootstrap", 300)
-    if not 0 <= int(cfg["bootstrap"]) <= 2000:
-        problems.append("bootstrap must be between 0 and 2000.")
+    _check_ints(cfg, problems)
+    _check_thresholds(cfg, problems)
 
-    for key, value in (cfg.get("thresholds") or {}).items():
+    for col, label_name in ((pred, "Prediction"), (label, "Outcome")):
+        for where, frame in (("reference", ref), ("current", cur)):
+            if col and frame is not None and col in frame.columns:
+                distinct = frame[col].dropna().nunique()
+                if distinct > 2:
+                    problems.append(
+                        f"{label_name} column '{col}' has {distinct} distinct values in the {where} dataset. "
+                        "Only binary (two-outcome) predictions are supported; multi-class results are not audited."
+                    )
+
+    days = cfg.get("retention_days")
+    if days not in (None, ""):
         try:
-            float(value)
+            if int(days) < 1:
+                raise ValueError
+            cfg["retention_days"] = int(days)
         except (TypeError, ValueError):
-            problems.append(f"Threshold '{key}' must be a number.")
+            problems.append("retention_days must be a whole number of days, at least 1.")
+        if not cfg.get("retention_date_column"):
+            problems.append("retention_days needs retention_date_column.")
+        else:
+            need(cfg["retention_date_column"], "Retention date", ref, "reference")
 
     if cur is not None and not set(cfg["feature_columns"]) & set(cur.columns):
         problems.append("The reference and current datasets share no feature columns.")
@@ -199,4 +243,104 @@ def available_checks(cfg: dict, has_current: bool, model_source: str, has_bundle
             else "No supported model or explanation bundle provided; explanations cannot be computed from predictions alone.",
         },
         "privacy": {"available": True, "reason": ""},
+    }
+
+
+def load_jsonl(data: bytes, max_rows: int, max_bytes: Optional[int] = None) -> pd.DataFrame:
+    """One JSON object per line. Nested values are kept as JSON text so every column is flat."""
+    import json
+
+    if max_bytes is not None and len(data) > max_bytes:
+        raise AuditInputError(f"File is larger than the {max_bytes // (1024 * 1024)} MB limit.")
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise AuditInputError("The file is not valid UTF-8. Re-export it as UTF-8 and try again.")
+    rows = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            raise AuditInputError(f"Line {number} is not valid JSON. Each line must be one JSON object.")
+        if not isinstance(record, dict):
+            raise AuditInputError(f"Line {number} is not a JSON object.")
+        rows.append({k: (json.dumps(v) if isinstance(v, (dict, list)) else v) for k, v in record.items()})
+        if len(rows) > max_rows:
+            raise AuditInputError(f"The file has more than {max_rows:,} rows. Upload a sample or split it.")
+    if not rows:
+        raise AuditInputError("The file has no records.")
+    df = pd.DataFrame(rows)
+    df.columns = [str(c).strip() for c in df.columns]
+    if df.columns.duplicated().any():
+        raise AuditInputError("Duplicate column names after reading the file.")
+    return df
+
+
+def load_table(data: bytes, filename: str, max_rows: int, max_bytes: Optional[int] = None) -> pd.DataFrame:
+    if filename.lower().endswith((".jsonl", ".ndjson")):
+        return load_jsonl(data, max_rows, max_bytes)
+    return load_csv(data, max_rows, max_bytes)
+
+
+LLM_COLUMN_KEYS = ["prompt_column", "output_column", "context_column", "score_column", "citations_column", "refusal_column",
+                   "human_reviewed_column", "human_override_column"]
+
+
+def validate_llm_config(config: dict, ref: pd.DataFrame, cur: Optional[pd.DataFrame]) -> dict:
+    """Normalise a run config for an LLM system or raise AuditInputError listing every problem."""
+    problems: list[str] = []
+    cfg = dict(config or {})
+
+    if not cfg.get("output_column"):
+        problems.append("output_column is required: say which column holds the system's answer.")
+    for key in LLM_COLUMN_KEYS:
+        col = cfg.get(key) or None
+        cfg[key] = col
+        if col and col not in ref.columns:
+            problems.append(f"{key.replace('_', ' ').capitalize()} '{col}' is not in the reference dataset.")
+        elif col and cur is not None and col not in cur.columns and key in ("output_column", "prompt_column"):
+            problems.append(f"{key.replace('_', ' ').capitalize()} '{col}' is not in the current dataset.")
+
+    groups = list(cfg.get("group_columns") or [])
+    for g in groups:
+        if g not in ref.columns:
+            problems.append(f"Group column '{g}' is not in the reference dataset.")
+    cfg["group_columns"] = groups
+
+    if cfg.get("score_column") and cfg["score_column"] in ref.columns:
+        numeric = pd.to_numeric(ref[cfg["score_column"]], errors="coerce")
+        if numeric.notna().sum() == 0:
+            problems.append(f"Score column '{cfg['score_column']}' has no numeric values.")
+
+    for key in ("human_reviewed_column", "human_override_column"):
+        col = cfg.get(key)
+        if col and col in ref.columns and ref[col].dropna().nunique() > 2:
+            problems.append(f"'{col}' must be a yes/no (two-value) column.")
+
+    cfg["require_citations"] = bool(cfg.get("require_citations", False))
+    cfg["id_columns"] = list(cfg.get("id_columns") or [])
+    cfg["excluded_columns"] = sorted(set(cfg.get("excluded_columns") or []) | set(cfg["id_columns"]))
+    cfg["feature_columns"] = []
+    cfg["favourable_label"] = "1"
+    _check_ints(cfg, problems)
+    _check_thresholds(cfg, problems)
+
+    if problems:
+        raise AuditInputError(problems)
+    return cfg
+
+
+def available_llm_checks(cfg: dict, has_current: bool) -> dict[str, dict[str, Any]]:
+    has_groups = bool(cfg.get("group_columns"))
+    has_context = bool(cfg.get("context_column"))
+    return {
+        "bias": {"available": has_groups, "reason": "" if has_groups else "No group column declared, so gaps between groups cannot be assessed.",
+                 "error_rates": bool(cfg.get("score_column"))},
+        "drift": {"available": has_current, "reason": "" if has_current else "No current dataset, so there is nothing to compare against the reference."},
+        "grounding": {"available": True, "reason": "" if has_context else
+                      "No source or context column mapped: groundedness cannot be measured. Citation coverage is still reported."},
+        "privacy": {"available": True, "reason": ""},
+        "governance": {"available": True, "reason": ""},
     }

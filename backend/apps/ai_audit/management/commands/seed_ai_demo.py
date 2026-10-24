@@ -4,7 +4,8 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from apps.ai_audit.services.demo import seed_hirelens
+from apps.ai_audit.sample.compas import RealDataUnavailable
+from apps.ai_audit.services.demo import seed_compas, seed_finsum, seed_hirelens
 from apps.core.models import Membership, Tenant
 
 USERS = [
@@ -20,6 +21,8 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--password", help="Password for the demo users. A random one is generated if omitted.")
+        parser.add_argument("--compas-file", help="Path to compas-scores-two-years.csv if the automatic download is not possible.")
+        parser.add_argument("--offline", action="store_true", help="Skip the real-data download and use the synthetic tabular sample instead.")
 
     @transaction.atomic
     def handle(self, *args, **options):
@@ -40,11 +43,22 @@ class Command(BaseCommand):
             )
             memberships[username] = membership
 
-        system = seed_hirelens(tenant, memberships["founder@hirelens.example"])
+        founder = memberships["founder@hirelens.example"]
+        systems = [seed_finsum(tenant, founder)]
+        if options["offline"]:
+            systems.append(seed_hirelens(tenant, founder))
+        else:
+            try:
+                systems.append(seed_compas(tenant, founder, options["compas_file"]))
+            except RealDataUnavailable as exc:
+                self.stdout.write(self.style.WARNING(f"Real data not loaded: {exc}"))
+                self.stdout.write(self.style.WARNING("Loading the synthetic tabular sample instead."))
+                systems.append(seed_hirelens(tenant, founder))
 
         self.stdout.write(self.style.SUCCESS("Demo organisation ready."))
         self.stdout.write(f"  Tenant id : {tenant.id}")
-        self.stdout.write(f"  System    : {system.name}")
+        for system in systems:
+            self.stdout.write(f"  System    : {system.name} ({system.system_type})")
         self.stdout.write("  Users (all synthetic):")
         for username, role, _ in USERS:
             self.stdout.write(f"    {username}  [{role}]")

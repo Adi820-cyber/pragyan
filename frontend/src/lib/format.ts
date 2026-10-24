@@ -14,7 +14,21 @@ export const CATEGORY_LABEL: Record<string, string> = {
   bias: "Bias",
   drift: "Drift",
   explainability: "Explainability",
+  grounding: "Groundedness & traceability",
   privacy: "Data security & privacy",
+  governance: "Vendors, rights & oversight",
+};
+
+/** Display order of audit categories. */
+export const CATEGORY_ORDER = ["bias", "drift", "explainability", "grounding", "privacy", "governance"] as const;
+
+export const RIGHT_LABEL: Record<string, string> = {
+  access: "Access to data",
+  correction: "Correction of data",
+  erasure: "Erasure of data",
+  withdraw_consent: "Withdrawal of consent",
+  grievance: "Grievance redressal",
+  human_review: "Human review of an automated decision",
 };
 
 export const ROLE_LABEL: Record<string, string> = {
