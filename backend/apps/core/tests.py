@@ -121,7 +121,10 @@ class ReskureCoreArchitectureTests(TestCase):
 
 class ReskureApiEndpointsTest(TestCase):
     def setUp(self):
+        from django.core.cache import cache
         from rest_framework.test import APIClient
+
+        cache.clear()  # login throttle state must not leak between tests
         from apps.compliance.models import Framework, Control
         from apps.secops.models import AlertSource, SecurityAlert
 

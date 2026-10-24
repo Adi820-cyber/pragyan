@@ -6,7 +6,7 @@ import { Activity, Boxes, ClipboardCheck, FileText, LayoutDashboard, ListChecks,
 
 const NAV_ITEMS = [
   { label: "Overview", href: "/", icon: LayoutDashboard },
-  { label: "CISO Assistant", href: "/ciso-assistant", icon: SlidersHorizontal, Cloud },
+  { label: "CISO Assistant", href: "/ciso-assistant", icon: SlidersHorizontal },
   { label: "AI Systems", href: "/systems", icon: Boxes },
   { label: "Cloud Security", href: "/cloud-security", icon: Cloud },
   { label: "Audits", href: "/audits", icon: Activity },
