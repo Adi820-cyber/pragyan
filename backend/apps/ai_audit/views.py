@@ -1,6 +1,6 @@
 import hashlib
 import json
-from datetime import date
+from datetime import date, timedelta
 
 from django.conf import settings
 from django.db import transaction
@@ -408,13 +408,17 @@ class FindingViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.RetrieveModelM
 
 # ------------------------------------------------------------------ vendors and rights
 class DependencyViewSet(AIBaseViewSet, viewsets.ModelViewSet):
-    queryset = m.Dependency.objects.all()
+    queryset = m.Dependency.objects.select_related("system").all()
     serializer_class = s.DependencySerializer
 
     def get_queryset(self):
         qs = super().get_queryset()
-        system = self.request.query_params.get("system")
-        return qs.filter(system_id=system) if system else qs
+        params = self.request.query_params
+        if params.get("system"):
+            qs = qs.filter(system_id=params["system"])
+        if params.get("relationship"):
+            qs = qs.filter(relationship=params["relationship"])
+        return qs
 
 
 class RightsProcessViewSet(AIBaseViewSet, viewsets.ModelViewSet):
@@ -425,6 +429,46 @@ class RightsProcessViewSet(AIBaseViewSet, viewsets.ModelViewSet):
         qs = super().get_queryset()
         system = self.request.query_params.get("system")
         return qs.filter(system_id=system) if system else qs
+
+
+class DataSubjectRequestViewSet(AIBaseViewSet, mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin,
+                             mixins.UpdateModelMixin, viewsets.GenericViewSet):
+    """Request-level register of data-subject requests with due dates. Deleting is not offered: it is an audit trail."""
+    queryset = m.DataSubjectRequest.objects.select_related("system", "assignee").all()
+    serializer_class = s.DataSubjectRequestSerializer
+    http_method_names = ["get", "post", "patch", "head", "options"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        p = self.request.query_params
+        for key in ("system", "kind", "status"):
+            if p.get(key):
+                qs = qs.filter(**{key if key != "system" else "system_id": p[key]})
+        today = date.today()
+        if p.get("overdue") == "true":
+            qs = qs.filter(status__in=["received", "in_progress"], due_on__lt=today)
+        elif p.get("open") == "true":
+            qs = qs.filter(status__in=["received", "in_progress"])
+        return qs
+
+    def _apply_status(self, instance):
+        if instance.status in ("completed", "rejected"):
+            if instance.closed_on is None:
+                instance.closed_on = date.today()
+        elif instance.closed_on is not None:
+            instance.closed_on = None
+        instance.save(update_fields=["closed_on", "updated_at"])
+
+    def perform_create(self, serializer):
+        membership = _membership(self.request)
+        system = serializer.validated_data["system"]
+        if system.tenant_id != membership.tenant_id:
+            raise Http404("Not found.")
+        instance = serializer.save(tenant_id=membership.tenant_id)
+        self._apply_status(instance)
+
+    def perform_update(self, serializer):
+        self._apply_status(serializer.save())
 
 
 # ------------------------------------------------------------------ controls
@@ -439,7 +483,7 @@ class ControlPackView(APIView):
 
 
 class ControlAssessmentViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
-    queryset = m.ControlAssessment.objects.select_related("reviewer").prefetch_related("evidence_files").all()
+    queryset = m.ControlAssessment.objects.select_related("reviewer", "owner", "system").prefetch_related("evidence_files", "links", "events").all()
     serializer_class = s.ControlAssessmentSerializer
     http_method_names = ["get", "patch", "post", "head", "options"]
     MAX_EVIDENCE_BYTES = 10 * 1024 * 1024
@@ -450,11 +494,13 @@ class ControlAssessmentViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.Retr
         return qs.filter(system_id=system) if system else qs
 
     def partial_update(self, request, *args, **kwargs):
-        allowed = {k: v for k, v in request.data.items() if k in ("applicable", "applicability_rationale", "owner_note")}
+        allowed = {k: v for k, v in request.data.items() if k in ("applicable", "applicability_rationale", "owner_note", "owner")}
         a = self.get_object()
+        substantive = any(k in allowed for k in ("applicable", "applicability_rationale", "owner_note"))
+        before_state, before_owner = a.state, a.owner_id
         ser = self.get_serializer(a, data=allowed, partial=True)
         ser.is_valid(raise_exception=True)
-        was_reviewed = a.state in ("reviewed", "gap_identified")
+        was_reviewed = substantive and a.state in ("reviewed", "gap_identified")
         a = ser.save(updated_by=_membership(request))
         if "applicable" in allowed:
             if not a.applicable:
@@ -467,7 +513,15 @@ class ControlAssessmentViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.Retr
         if was_reviewed:
             a.reviewer, a.reviewed_at, a.review_comment = None, None, ""
         a.save(update_fields=["state", "reviewer", "reviewed_at", "review_comment", "updated_at"])
-        return Response(self.get_serializer(a).data)
+        actor = _membership(request)
+        if substantive:
+            note = "Edited applicability or notes."
+            if was_reviewed:
+                note += " Earlier reviewer sign-off was cleared because the record changed."
+            controls_service.log_event(a, "edited", actor, before_state, a.state, note)
+        if "owner" in allowed and a.owner_id != before_owner:
+            controls_service.log_event(a, "owner_changed", actor, note=f"Owner set to {a.owner.full_name or a.owner.email}." if a.owner else "Owner cleared.")
+        return Response(self.get_serializer(m.ControlAssessment.all_objects.get(id=a.id)).data)
 
     @action(detail=False, methods=["POST"])
     def ensure(self, request):
@@ -495,10 +549,38 @@ class ControlAssessmentViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.Retr
         )
         evidence.file.save("evidence.bin", upload, save=False)
         evidence.save()
+        controls_service.log_event(assessment, "evidence_added", membership, assessment.state, note=f"File: {title[:200]}")
         if assessment.state in ("needs_evidence", "gap_identified", "reviewed"):
             m.ControlAssessment.all_objects.filter(id=assessment.id).update(
                 state="evidence_supplied", reviewer=None, reviewed_at=None, review_comment="", updated_at=timezone.now())
         return Response(s.ControlEvidenceSerializer(evidence).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["POST"], url_path="links")
+    def add_link(self, request, pk=None):
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        from django.core.validators import URLValidator
+
+        membership = _membership(request)
+        assessment = self.get_object()
+        if not assessment.applicable:
+            raise ValidationError({"detail": "This control is marked not applicable."})
+        title = (request.data.get("title") or "").strip()
+        url = (request.data.get("url") or "").strip()
+        if not title or not url:
+            raise ValidationError({"detail": "Provide a title and a link."})
+        if not url.lower().startswith(("http://", "https://")):
+            raise ValidationError({"url": "Links must start with http:// or https://."})
+        try:
+            URLValidator(schemes=["http", "https"])(url)
+        except DjangoValidationError:
+            raise ValidationError({"url": "That does not look like a valid link."})
+        link = m.ControlLink.objects.create(
+            tenant_id=membership.tenant_id, assessment=assessment, title=title[:200], url=url[:500], added_by=membership)
+        controls_service.log_event(assessment, "link_added", membership, assessment.state, note=f"Link: {title[:200]}")
+        if assessment.state in ("needs_evidence", "gap_identified", "reviewed"):
+            m.ControlAssessment.all_objects.filter(id=assessment.id).update(
+                state="evidence_supplied", reviewer=None, reviewed_at=None, review_comment="", updated_at=timezone.now())
+        return Response(s.ControlLinkSerializer(link).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["POST"])
     def review(self, request, pk=None):
@@ -513,10 +595,11 @@ class ControlAssessmentViewSet(AIBaseViewSet, mixins.ListModelMixin, mixins.Retr
             raise ValidationError({"comment": "A review comment is required."})
         if assessment.state == "not_applicable":
             raise ValidationError({"detail": "A control marked not applicable is not reviewed."})
-        if decision == "reviewed" and not assessment.evidence_files.exists():
+        if decision == "reviewed" and not (assessment.evidence_files.exists() or assessment.links.exists()):
             raise ValidationError({"detail": "A control cannot be marked reviewed without evidence."})
         if assessment.evidence_files.filter(uploaded_by=membership).exists():
             raise PermissionDenied("Segregation of duties: the person who supplied the evidence cannot review it.")
+        controls_service.log_event(assessment, decision, membership, assessment.state, decision, comment)
         m.ControlAssessment.all_objects.filter(id=assessment.id).update(
             state=decision, reviewer=membership, reviewed_at=timezone.now(), review_comment=comment, updated_at=timezone.now())
         return Response(self.get_serializer(m.ControlAssessment.all_objects.get(id=assessment.id)).data)
@@ -537,8 +620,22 @@ class ControlEvidenceViewSet(AIBaseViewSet, mixins.RetrieveModelMixin, mixins.De
         evidence = self.get_object()
         if evidence.assessment.state == "reviewed":
             return Response({"detail": "Evidence for a reviewed control cannot be deleted."}, status=status.HTTP_409_CONFLICT)
+        controls_service.log_event(evidence.assessment, "evidence_removed", _membership(request), evidence.assessment.state, note=f"File: {evidence.title}")
         evidence.file.delete(save=False)
         evidence.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ControlLinkViewSet(AIBaseViewSet, mixins.DestroyModelMixin, viewsets.GenericViewSet):
+    queryset = m.ControlLink.objects.select_related("assessment").all()
+    serializer_class = s.ControlLinkSerializer
+
+    def destroy(self, request, *args, **kwargs):
+        link = self.get_object()
+        if link.assessment.state == "reviewed":
+            return Response({"detail": "Links for a reviewed control cannot be removed."}, status=status.HTTP_409_CONFLICT)
+        controls_service.log_event(link.assessment, "link_removed", _membership(request), link.assessment.state, note=f"Link: {link.title}")
+        link.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -574,12 +671,33 @@ class OverviewView(APIView):
                 "id": str(system.id), "name": system.name, "latest_run_id": str(run.id) if run else None,
                 "latest_run_at": run.finished_at if run else None, "coverage": coverage,
                 "open_findings": m.Finding.all_objects.filter(system=system).exclude(status__in=["accepted", "resolved"]).count(),
-                "control_gaps": controls_service.summarise(system)["needs_attention"],
+                "control_gaps": (summary := controls_service.summarise(system))["needs_attention"],
+                "controls": {k: summary[k] for k in ("applicable", "reviewed", "reviewed_pct", "evidence_pct")},
             })
         today = date.today()
         open_findings = m.Finding.all_objects.filter(tenant_id=tid).exclude(status__in=["accepted", "resolved"])
+        applicable = sum(c["controls"]["applicable"] for c in cards)
+        reviewed = sum(c["controls"]["reviewed"] for c in cards)
+        deps = list(m.Dependency.all_objects.filter(tenant_id=tid).select_related("system"))
+        ser = s.DependencySerializer(context={"request": request})
+        risks = [ser.get_risk(d) for d in deps]
+        reqs = m.DataSubjectRequest.all_objects.filter(tenant_id=tid)
+        open_reqs = reqs.filter(status__in=["received", "in_progress"])
         return Response({
             "systems": cards,
+            "controls": {
+                "applicable": applicable, "reviewed": reviewed,
+                "reviewed_pct": round(100 * reviewed / applicable) if applicable else None,
+                "gaps": sum(c["control_gaps"] for c in cards),
+            },
+            "vendors": {
+                "total": len(deps), "high_risk": risks.count("high"), "without_dpa": sum(1 for d in deps if d.personal_data_shared and not d.contract_in_place),
+                "cross_border": sum(1 for d in deps if d.personal_data_shared and (d.outside_india or d.outside_eea)),
+            },
+            "requests": {
+                "total": reqs.count(), "open": open_reqs.count(), "overdue": open_reqs.filter(due_on__lt=today).count(),
+                "due_in_7_days": open_reqs.filter(due_on__gte=today, due_on__lte=today + timedelta(days=7)).count(),
+            },
             "totals": {
                 "systems": len(cards),
                 "open_findings": open_findings.count(),

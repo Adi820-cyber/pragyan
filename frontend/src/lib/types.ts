@@ -117,12 +117,6 @@ export interface Me {
   active_membership: Membership | null;
 }
 
-export interface Person {
-  id: string;
-  name: string;
-  role: string;
-}
-
 export interface Paged<T> {
   count: number;
   results: T[];
@@ -332,10 +326,47 @@ export interface ControlAssessment {
   applicability_rationale: string;
   state: "needs_evidence" | "evidence_supplied" | "reviewed" | "gap_identified" | "not_applicable";
   owner_note: string;
+  owner: string | null;
+  owner_name: string | null;
   reviewer_name: string | null;
   reviewed_at: string | null;
   review_comment: string;
   evidence_files: ControlEvidenceFile[];
+  links: { id: string; title: string; url: string; added_by_name: string | null; created_at: string }[];
+  history: { id: string; kind: string; from_state: string; to_state: string; note: string; actor_name: string | null; created_at: string }[];
+  automated: {
+    run_id: string;
+    finished_at: string | null;
+    counts: Partial<Record<ResultState, number>>;
+    signal: ResultState | null;
+    flagged: { subject: string; summary: string }[];
+  } | null;
+  basis: "none" | "manual" | "automated" | "both";
+  gaps: string[];
+  last_assessed: string | null;
+}
+export interface DataSubjectRequest {
+  id: string;
+  system: string;
+  system_name: string;
+  reference: string;
+  kind: RightKey | "consent";
+  kind_label: string;
+  status: "received" | "in_progress" | "completed" | "rejected";
+  received_on: string;
+  due_on: string;
+  closed_on: string | null;
+  assignee: string | null;
+  assignee_name: string | null;
+  notes: string;
+  is_demo: boolean;
+  overdue: boolean;
+  days_left: number | null;
+}
+export interface Person {
+  id: string;
+  name: string;
+  role: string;
 }
 
 export interface ControlPack {
@@ -357,7 +388,11 @@ export interface Overview {
     coverage: Partial<Record<Category, { status: CoverageStatus; status_label: string; counts: Partial<Record<ResultState, number>> }>> | null;
     open_findings: number;
     control_gaps: number;
+    controls: { applicable: number; reviewed: number; reviewed_pct: number | null; evidence_pct: number | null };
   }[];
+  controls: { applicable: number; reviewed: number; reviewed_pct: number | null; gaps: number };
+  vendors: { total: number; high_risk: number; without_dpa: number; cross_border: number };
+  requests: { total: number; open: number; overdue: number; due_in_7_days: number };
   totals: {
     systems: number;
     open_findings: number;
@@ -419,6 +454,11 @@ export interface Dependency {
   subprocessors_listed: boolean;
   exit_plan: boolean;
   criticality: "low" | "medium" | "high";
+  relationship: "processor" | "sub_processor" | "joint_controller" | "other";
+  is_demo: boolean;
+  risk: "high" | "medium" | "low" | "unknown";
+  gaps: string[];
+  system_name: string;
   last_reviewed: string | null;
   notes: string;
 }

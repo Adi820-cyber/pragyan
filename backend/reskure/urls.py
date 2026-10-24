@@ -98,6 +98,8 @@ router.register(r"ai/rights-processes", ai.RightsProcessViewSet, basename="ai-ri
 router.register(r"ai/findings", ai.FindingViewSet, basename="ai-finding")
 router.register(r"ai/control-assessments", ai.ControlAssessmentViewSet, basename="ai-control-assessment")
 router.register(r"ai/control-evidence", ai.ControlEvidenceViewSet, basename="ai-control-evidence")
+router.register(r"ai/control-links", ai.ControlLinkViewSet, basename="ai-control-link")
+router.register(r"ai/subject-requests", ai.DataSubjectRequestViewSet, basename="ai-subject-request")
 
 # NetBox-style Network & Data Path Traversal
 from apps.network import views as net
