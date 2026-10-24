@@ -4,7 +4,12 @@ import { cookies } from "next/headers";
 export const TOKEN_COOKIE = "reskure_token";
 export const TENANT_COOKIE = "reskure_tenant";
 function getApiBase() {
-  const raw = process.env.API_BASE_URL ?? "http://localhost:8000/api/v1";
+  let raw = (process.env.API_BASE_URL ?? "http://localhost:8000/api/v1").trim();
+  if (!raw.startsWith("http://") && !raw.startsWith("https://")) {
+    raw = raw.includes("localhost") || raw.includes("127.0.0.1") || !raw.includes(".")
+      ? `http://${raw}`
+      : `https://${raw}`;
+  }
   const trimmed = raw.replace(/\/+$/, "");
   return trimmed.endsWith("/api/v1") ? trimmed : `${trimmed}/api/v1`;
 }
