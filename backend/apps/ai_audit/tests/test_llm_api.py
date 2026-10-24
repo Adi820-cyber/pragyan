@@ -129,6 +129,16 @@ class LlmSystemApiTests(AuditTestCase):
         self.assertEqual(bad.status_code, 400)
         self.assertIn("output_column", json.dumps(bad.json()))
 
+    def test_preview_reports_a_missing_dataset_file_instead_of_a_server_error(self):
+        system = seed_finsum(self.members["owner_a"].tenant, self.members["owner_a"])
+        mv = m.ModelVersion.all_objects.get(system=system, version_label="v1")
+        ref = m.Dataset.all_objects.get(system=system, role="reference", name__contains="(v1 ")
+        ref.file.storage.delete(ref.file.name)
+        body = {"system": str(system.id), "model_version": str(mv.id), "reference_dataset": str(ref.id), "config": ref.sample_config}
+        response = self.owner.post("/api/v1/ai/runs/preview/", body, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("is missing", json.dumps(response.json()))
+
     def test_jsonl_upload_is_converted_and_validated(self):
         system = self.owner.post("/api/v1/ai/systems/", {"name": "Bot", "purpose": "p"}, format="json").json()
         lines = "\n".join(json.dumps({"prompt": f"q{i}", "output": f"a{i}", "meta": {"k": i}}) for i in range(5)).encode()

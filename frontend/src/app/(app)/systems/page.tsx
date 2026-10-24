@@ -4,6 +4,8 @@ import { SystemForm } from "@/components/systems/SystemForm";
 import { LoadSampleButton } from "@/components/systems/LoadSampleButton";
 import { StateBadge } from "@/components/ui/StateBadge";
 import { EmptyState, ErrorState, Panel } from "@/components/ui/Panel";
+import { WhatThisShows } from "@/components/ui/WhatThisShows";
+import { SYSTEM_TYPE_LABEL, impactProfile } from "@/lib/systemProfile";
 import { api, errorMessage, list } from "@/lib/server/api";
 import { dateTime } from "@/lib/format";
 import type { AISystem, Person } from "@/lib/types";
@@ -22,6 +24,11 @@ export default async function SystemsPage() {
 
   return (
     <PageShell title="AI Systems" subtitle="The systems you audit, who owns them and who reviews them">
+      <WhatThisShows>
+        The AI systems your organisation has registered for auditing. For each one you can see its type, who owns and reviews it, how much scrutiny it needs, and the outcome of its latest audit.
+        Impact profile is a quick guide worked out from the answers recorded about the system, not a legal risk classification.
+        Open a system to manage its model versions, data, vendors and rights processes.
+      </WhatThisShows>
       {failure && <ErrorState message={failure} />}
       {!failure && systems.length === 0 && (
         <EmptyState title="No AI systems yet">
@@ -36,6 +43,8 @@ export default async function SystemsPage() {
             <thead>
               <tr className="text-left text-xs text-slate-400 border-b border-white/10">
                 <th scope="col" className="p-3 font-medium">System</th>
+                <th scope="col" className="p-3 font-medium">Type</th>
+                <th scope="col" className="p-3 font-medium">Impact profile</th>
                 <th scope="col" className="p-3 font-medium">Owner</th>
                 <th scope="col" className="p-3 font-medium">Reviewer</th>
                 <th scope="col" className="p-3 font-medium">Latest audit</th>
@@ -50,6 +59,11 @@ export default async function SystemsPage() {
                       {s.name}
                     </Link>
                     <div className="text-xs text-slate-500 max-w-md truncate">{s.purpose}</div>
+                  </td>
+                  <td className="p-3 text-xs text-slate-300">{SYSTEM_TYPE_LABEL[s.system_type] ?? s.system_type}</td>
+                  <td className="p-3 text-xs text-slate-300">
+                    {impactProfile(s).label}
+                    {impactProfile(s).reasons.length > 0 && <div className="text-slate-500 max-w-48">{impactProfile(s).reasons.join(", ")}</div>}
                   </td>
                   <td className="p-3 text-slate-300">{s.owner_name ?? "Not assigned"}</td>
                   <td className="p-3 text-slate-300">{s.reviewer_name ?? "Not assigned"}</td>
