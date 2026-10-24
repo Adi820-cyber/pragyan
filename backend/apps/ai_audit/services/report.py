@@ -1,4 +1,5 @@
 """Audit report (JSON + printable HTML) and run-to-run comparison."""
+import hashlib
 import json
 
 from django.core.serializers.json import DjangoJSONEncoder
@@ -174,7 +175,7 @@ def build_report(run: AuditRun) -> dict:
             }
         )
 
-    return {
+    report = {
         "generated_at": timezone.now(),
         "run": {
             "id": str(run.id), "status": run.status, "started_at": run.started_at, "finished_at": run.finished_at,
@@ -202,9 +203,12 @@ def build_report(run: AuditRun) -> dict:
         "rights": context.get("rights", []),
         "limitations": LIMITATIONS,
     }
+    report["executive_summary"] = executive_summary(report)
+    report["regulatory_mapping"] = regulatory_mapping(report)
+    return report
 
 
-def render_html(report: dict) -> str:
+def render_html(report: dict, workflow: dict | None = None) -> str:
     sections = []
     for item in report["categories"]:
         key, label = item["key"], item["label"]
@@ -222,7 +226,7 @@ def render_html(report: dict) -> str:
         if r["metric"] in ("selection_rate", "true_positive_rate", "false_positive_rate") and r["value"] is not None:
             r["bar"] = round(100 * r["value"])
     ctx = {"report": report, "sections": sections, "importance": importance, "examples": examples,
-           "status_labels": STATUS_LABELS}
+           "status_labels": STATUS_LABELS, "workflow": workflow}
     return render_to_string("ai_audit/report.html", ctx)
 
 
@@ -265,3 +269,208 @@ def diff_runs(base: AuditRun, other: AuditRun) -> dict:
         },
         "note": "Findings that disappear are not automatically resolved: review the measurements. A persisting finding is still open evidence.",
     }
+
+
+# ---------------------------------------------------------------------------
+# Plain-language summary, regulation mapping, fingerprint and exports.
+_SEVERITY_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+_CAT_LABEL = dict(CATEGORIES)
+_UNRESOLVED = ("open", "in_remediation", "submitted")
+
+
+def _fmt(value) -> str:
+    return "n/a" if value is None else f"{value:.3f}".rstrip("0").rstrip(".")
+
+
+def executive_summary(report: dict) -> dict:
+    """Plain-language summary derived only from stored measurements. It never says 'compliant' or 'passed'."""
+    flat = [(key, r) for key, rows in report["results"].items() for r in rows]
+    to_review = [(k, r) for k, r in flat if r["state"] == "review_required"]
+    errors = [(k, r) for k, r in flat if r["state"] == "error"]
+    unknown = [(k, r) for k, r in flat if r["state"] in ("insufficient_evidence", "not_applicable")]
+    not_assessed = [v["label"] for v in report["coverage"].values() if v["status"] == "not_assessed"]
+
+    if errors:
+        level, headline = "incomplete", "Incomplete: some checks did not finish"
+        text = f"{len(errors)} check(s) ended in an error, so this audit cannot be read as a full picture. Re-run before relying on it."
+    elif to_review:
+        level, headline = "attention", "Needs attention: issues found for human review"
+        text = (f"{len(to_review)} of {len(flat)} measurements crossed the screening policy stored with this run. "
+                "These are alerts for a person to review, not proof of harm or of a legal breach.")
+    elif flat:
+        level, headline = "no_alert", "No alert under the selected policy for the checks that ran"
+        text = ("None of the measurements that ran crossed the stored screening policy. This is not a statement that the "
+                "system is fair, safe or compliant, and anything listed under 'Not tested' is still unchecked.")
+    else:
+        level, headline = "incomplete", "No measurements recorded"
+        text = "This run recorded no results, so there is nothing to summarise."
+
+    risks = []
+    open_findings = sorted((f for f in report["findings"] if f["status"] in _UNRESOLVED),
+                           key=lambda f: _SEVERITY_ORDER.get(f["severity"], 3))
+    for f in open_findings[:3]:
+        risks.append({"title": f["title"], "severity": f["severity"], "why": f["plain_language"], "next_step": f["next_step"],
+                      "source": "finding"})
+    if len(risks) < 3:
+        used = {x["title"] for x in risks}
+        for key, r in to_review:
+            if len(risks) == 3:
+                break
+            title = f"{_CAT_LABEL.get(key, key)}: {r['metric']}" + (f" ({r['subject']})" if r["subject"] else "")
+            if title not in used:
+                risks.append({"title": title, "severity": None, "why": r["summary"], "next_step": "", "source": "measurement"})
+
+    failed = [
+        {"category": _CAT_LABEL.get(k, k), "check": r["metric"], "subject": r["subject"], "value": r["value"],
+         "threshold": r["threshold"], "support_n": r["support_n"], "why": r["summary"]}
+        for k, r in to_review[:12]
+    ]
+
+    limits = []
+    if not_assessed:
+        limits.append(f"Not assessed at all: {', '.join(not_assessed)}.")
+    for k, r in unknown[:8]:
+        limits.append(f"{_CAT_LABEL.get(k, k)}, {r['metric']}: {r['summary']}")
+    cs = report["controls_summary"]
+    if not report["system"].get("jurisdictions"):
+        limits.append("No jurisdiction (DPDP or GDPR) was selected, so no control checklist was assessed.")
+    elif cs["needs_attention"]:
+        limits.append(f"{cs['needs_attention']} of {cs['applicable']} applicable DPDP/GDPR controls still lack reviewed evidence.")
+    synthetic = [d["name"] for d in report["datasets"] if d.get("is_sample") and not d.get("is_real_data")]
+    if synthetic:
+        limits.append(f"Synthetic sample data was used ({', '.join(synthetic)}), so numbers illustrate the method and do not describe real people.")
+    limits.append("Infrastructure, security controls and legal obligations are not verified by this tool. See Limitations.")
+
+    cats = []
+    for key, cov in report["coverage"].items():
+        rows = report["results"].get(key, [])
+        lead = next((r for r in rows if r["state"] == "review_required"), None) or next((r for r in rows if r["value"] is not None), None)
+        cats.append({"key": key, "label": cov["label"], "status": cov["status"], "status_label": cov["status_label"],
+                     "count_text": cov["count_text"],
+                     "headline": (f"{lead['metric']}{' (' + lead['subject'] + ')' if lead['subject'] else ''} = {_fmt(lead['value'])}"
+                                  f"{' on ' + str(lead['support_n']) + ' rows' if lead['support_n'] else ''}") if lead and lead["value"] is not None
+                     else (lead["summary"] if lead else "No result recorded")})
+
+    deps, rights = report.get("dependencies", []), report.get("rights", [])
+    governance = {
+        "vendors": len(deps),
+        "vendors_sharing_personal_data": sum(1 for d in deps if d["personal_data_shared"]),
+        "vendors_sharing_without_contract": sum(1 for d in deps if d["personal_data_shared"] and not d["contract_in_place"]),
+        "vendors_without_exit_plan": sum(1 for d in deps if not d["exit_plan"]),
+        "rights_procedures": len(rights),
+        "rights_without_procedure": sum(1 for p in rights if not p["procedure_exists"]),
+        "rights_never_tested": sum(1 for p in rights if not p["last_tested"]),
+    }
+    return {"verdict": {"level": level, "headline": headline, "text": text}, "top_risks": risks, "failed": failed,
+            "not_tested": limits, "categories": cats, "governance": governance,
+            "counts": {"measurements": len(flat), "review_required": len(to_review), "errors": len(errors),
+                       "unresolved_findings": len(open_findings)}}
+
+
+# Which audit areas are relevant to which provisions. "Supports evidence for" only: a measurement can inform a
+# provision but never shows that an organisation meets it.
+AREA_PROVISIONS = {
+    "bias": {"dpdp": "No provision on algorithmic fairness; s.8(3) (completeness, accuracy and consistency of data used for decisions) is the nearest link.",
+             "gdpr": "Art. 5(1)(a) (fairness) and Art. 22 (automated individual decisions)."},
+    "drift": {"dpdp": "s.8(3) (accuracy and consistency of data used for decisions).", "gdpr": "Art. 5(1)(d) (accuracy)."},
+    "explainability": {"dpdp": "s.5 (notice) is the nearest link; the Act has no explicit explanation right for automated decisions.",
+                       "gdpr": "Art. 22(3) (safeguards for automated decisions) and Arts. 13-15 (information about the logic involved)."},
+    "grounding": {"dpdp": "s.8(3) (accuracy and consistency of data used for decisions).", "gdpr": "Art. 5(1)(d) (accuracy)."},
+    "privacy": {"dpdp": "s.6(1) (data limited to what is necessary), s.8(5) (security safeguards), s.8(7) (erasure); DPDP Rules 2025, r.6.",
+                "gdpr": "Art. 5(1)(c) (data minimisation), Art. 5(1)(e) (storage limitation), Art. 32 (security of processing)."},
+    "governance": {"dpdp": "s.8(2) (processors) and ss.11-14 (rights of Data Principals and grievance redressal).",
+                   "gdpr": "Art. 28 (processors), Arts. 12-22 (data-subject rights), Chapter V (transfers)."},
+}
+MAPPING_NOTICE = ("The audit supports evidence for these provisions. It does not show that an organisation complies with them. "
+                  "Provision references are a plain-language aid, have not been reviewed by counsel, and DPDP provisions commence in phases.")
+_CONTROL_PHRASE = {
+    "reviewed": "Evidence reviewed by a person",
+    "evidence_supplied": "Evidence uploaded, awaiting review",
+    "needs_evidence": "No evidence yet",
+    "gap_identified": "Gap identified by reviewer",
+    "not_applicable": "Marked not applicable",
+}
+
+
+def regulatory_mapping(report: dict) -> dict:
+    areas = [
+        {"key": item["key"], "label": item["label"], "coverage": report["coverage"][item["key"]]["status_label"],
+         "dpdp": AREA_PROVISIONS[item["key"]]["dpdp"], "gdpr": AREA_PROVISIONS[item["key"]]["gdpr"]}
+        for item in report["categories"] if item["key"] in AREA_PROVISIONS
+    ]
+    by_reg: dict[str, list] = {"DPDP": [], "GDPR": []}
+    for c in report["controls"]:
+        reg = "DPDP" if c["pack_id"].startswith("dpdp") else "GDPR"
+        by_reg[reg].append({"control_id": c["control_id"], "title": c["title"], "source": c["source"],
+                            "state": c["state"], "status_text": _CONTROL_PHRASE.get(c["state"], c["state"]),
+                            "evidence_count": len(c["evidence"]), "applicable": c["applicable"]})
+    return {"notice": MAPPING_NOTICE, "areas": areas, "controls": by_reg}
+
+
+# ---------------------------------------------------------------------------
+def canonical_json(data) -> str:
+    return json.dumps(data, sort_keys=True, separators=(",", ":"), cls=DjangoJSONEncoder)
+
+
+def results_digest(run: AuditRun) -> str:
+    """Hash of the run's stored measurements. Detects edits to the data a report was built from."""
+    rows = sorted((_result_dict(r) for r in run.results.all()),
+                  key=lambda r: (r["category"], r["check_key"], r["subject"], r["metric"]))
+    return hashlib.sha256(canonical_json(rows).encode()).hexdigest()
+
+
+def freeze_report(run: AuditRun) -> tuple[dict, str]:
+    """Build the report once and return (snapshot, sha256 fingerprint). The snapshot is JSON round-tripped so it hashes the same when re-read."""
+    snapshot = json.loads(canonical_json(build_report(run)))
+    snapshot["source_results_sha256"] = results_digest(run)
+    return snapshot, hashlib.sha256(canonical_json(snapshot).encode()).hexdigest()
+
+
+def verify_report(report) -> dict:
+    """Recompute both hashes without writing anything."""
+    snapshot_ok = hashlib.sha256(canonical_json(report.snapshot).encode()).hexdigest() == report.fingerprint
+    source_ok = results_digest(report.run) == report.snapshot.get("source_results_sha256")
+    return {"valid": snapshot_ok and source_ok, "snapshot_matches": snapshot_ok, "source_results_match": source_ok,
+            "fingerprint": report.fingerprint, "checked_at": timezone.now()}
+
+
+def workflow_block(report, people: dict) -> dict:
+    return {
+        "version": report.version, "status": report.status, "status_label": report.get_status_display(),
+        "fingerprint": report.fingerprint, "generated_by": people.get("generated_by"), "generated_at": report.created_at,
+        "submitted_by": people.get("submitted_by"), "submitted_at": report.submitted_at,
+        "approved_by": people.get("approved_by"), "approved_at": report.approved_at, "review_comment": report.review_comment,
+    }
+
+
+def render_markdown(report: dict, workflow: dict | None = None) -> str:
+    ex, rm = report["executive_summary"], report["regulatory_mapping"]
+    s, mv = report["system"], report["model_version"]
+    out = [f"# Responsible AI audit report: {s['name']}", "",
+           f"Model {mv['label']} | run {report['run']['id']} | run finished {report['run'].get('finished_at') or 'n/a'}", ""]
+    if workflow:
+        out += [f"Report version {workflow['version']} | status: {workflow['status_label']} | "
+                f"generated by {workflow['generated_by'] or 'unknown'} | approved by {workflow['approved_by'] or 'not yet approved'}",
+                f"Fingerprint (SHA-256 of the frozen snapshot): `{workflow['fingerprint']}`", ""]
+    out += ["> " + report["limitations"][0], "", "## Executive summary", "", f"**{ex['verdict']['headline']}**", "", ex["verdict"]["text"], "",
+            "### Top risks", ""]
+    out += [f"{i}. {r['title']}" + (f" ({r['severity']})" if r["severity"] else "") + f": {r['why']}" for i, r in enumerate(ex["top_risks"], 1)] \
+        or ["No open findings or alerts."]
+    out += ["", "### What failed and why", ""]
+    out += [f"- {f['category']} / {f['check']}{' (' + f['subject'] + ')' if f['subject'] else ''}: {f['why']}" for f in ex["failed"]] or ["- Nothing crossed the screening policy."]
+    out += ["", "### Not tested or limited", ""] + [f"- {x}" for x in ex["not_tested"]]
+    out += ["", "## Results by area", ""]
+    for c in ex["categories"]:
+        out.append(f"- **{c['label']}**: {c['status_label']} ({c['count_text'] or 'no results'}). {c['headline']}")
+    g = ex["governance"]
+    out += ["", "## Vendors and data rights", "",
+            f"- Vendors recorded: {g['vendors']}; sharing personal data: {g['vendors_sharing_personal_data']}; sharing without a contract on record: {g['vendors_sharing_without_contract']}; without exit plan: {g['vendors_without_exit_plan']}",
+            f"- Data-rights procedures recorded: {g['rights_procedures']}; missing: {g['rights_without_procedure']}; never tested: {g['rights_never_tested']}",
+            "", "## Regulation mapping (DPDP Act 2023 / GDPR)", "", rm["notice"], ""]
+    for a in rm["areas"]:
+        out += [f"- **{a['label']}** ({a['coverage']}). DPDP: {a['dpdp']} GDPR: {a['gdpr']}"]
+    for reg, items in rm["controls"].items():
+        if items:
+            out += ["", f"### {reg} readiness controls", ""] + [f"- {c['control_id']} {c['title']} ({c['source']}): {c['status_text']}" for c in items]
+    out += ["", "## Limitations", ""] + [f"- {x}" for x in report["limitations"]]
+    return "\n".join(out) + "\n"

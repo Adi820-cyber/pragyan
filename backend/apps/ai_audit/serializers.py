@@ -1,4 +1,4 @@
-from rest_framework import serializers
+﻿from rest_framework import serializers
 
 from apps.ai_audit import models as m
 from apps.ai_audit.sample.registry import features_for, known_keys
@@ -305,3 +305,65 @@ class RightsProcessSerializer(TenantBoundSerializer):
         if on_time > requests:
             raise serializers.ValidationError({"closed_on_time_12m": "Cannot be more than the number of requests received."})
         return attrs
+
+
+class ReportEventSerializer(serializers.ModelSerializer):
+    actor_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = m.ReportEvent
+        fields = ["id", "action", "from_status", "to_status", "comment", "actor_name", "created_at"]
+        read_only_fields = fields
+
+    def get_actor_name(self, obj):
+        return _name(obj.actor) or "system"
+
+
+class AuditReportSerializer(serializers.ModelSerializer):
+    """List shape: no snapshot, so the list stays small."""
+
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+    system_name = serializers.CharField(source="system.name", read_only=True)
+    model_version_label = serializers.CharField(source="run.model_version.version_label", read_only=True)
+    audit_date = serializers.DateTimeField(source="run.finished_at", read_only=True)
+    generated_by_name = serializers.SerializerMethodField()
+    submitted_by_name = serializers.SerializerMethodField()
+    approved_by_name = serializers.SerializerMethodField()
+    verdict = serializers.SerializerMethodField()
+
+    class Meta:
+        model = m.AuditReport
+        fields = [
+            "id", "run", "system", "system_name", "model_version_label", "generated_by", "submitted_by", "version", "status", "status_label", "audit_date",
+            "fingerprint", "generated_by_name", "submitted_by_name", "submitted_at", "approved_by_name", "approved_at",
+            "review_comment", "created_at", "verdict",
+        ]
+        read_only_fields = fields
+
+    def get_generated_by_name(self, obj):
+        return _name(obj.generated_by)
+
+    def get_submitted_by_name(self, obj):
+        return _name(obj.submitted_by)
+
+    def get_approved_by_name(self, obj):
+        return _name(obj.approved_by)
+
+    def get_verdict(self, obj):
+        return (obj.snapshot.get("executive_summary") or {}).get("verdict")
+
+
+class AuditReportDetailSerializer(AuditReportSerializer):
+    events = ReportEventSerializer(many=True, read_only=True)
+    executive_summary = serializers.SerializerMethodField()
+    regulatory_mapping = serializers.SerializerMethodField()
+
+    class Meta(AuditReportSerializer.Meta):
+        fields = AuditReportSerializer.Meta.fields + ["events", "executive_summary", "regulatory_mapping"]
+        read_only_fields = fields
+
+    def get_executive_summary(self, obj):
+        return obj.snapshot.get("executive_summary")
+
+    def get_regulatory_mapping(self, obj):
+        return obj.snapshot.get("regulatory_mapping")

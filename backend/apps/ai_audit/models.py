@@ -377,3 +377,48 @@ class RightsProcess(TenantScopedModel):
         db_table = "ai_rights_process"
         ordering = ["right"]
         constraints = [models.UniqueConstraint(fields=["system", "right"], name="unique_right_per_system")]
+
+
+class AuditReport(TenantScopedModel):
+    """A frozen, versioned report generated from a completed audit run.
+
+    The snapshot is the report as it was at generation. Its SHA-256 fingerprint is stored
+    so any later change to the stored snapshot, or to the measurements it was built from,
+    can be detected. Approval needs a different person from the generator and the submitter.
+    """
+
+    STATUS_CHOICES = [("draft", "Draft"), ("in_review", "In review"), ("approved", "Approved")]
+
+    run = models.ForeignKey(AuditRun, on_delete=models.PROTECT, related_name="reports")
+    system = models.ForeignKey(AISystem, on_delete=models.CASCADE, related_name="reports")
+    version = models.PositiveIntegerField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="draft", db_index=True)
+    snapshot = models.JSONField(default=dict)
+    fingerprint = models.CharField(max_length=64)
+    generated_by = models.ForeignKey(Membership, null=True, on_delete=models.SET_NULL, related_name="generated_reports")
+    submitted_by = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="submitted_reports")
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL, related_name="approved_reports")
+    approved_at = models.DateTimeField(null=True, blank=True)
+    review_comment = models.TextField(blank=True)
+
+    class Meta:
+        db_table = "ai_report"
+        ordering = ["-created_at"]
+        constraints = [models.UniqueConstraint(fields=["system", "version"], name="uniq_report_version_per_system")]
+
+    def __str__(self):
+        return f"Report v{self.version} ({self.status})"
+
+
+class ReportEvent(TenantScopedModel):
+    report = models.ForeignKey(AuditReport, on_delete=models.CASCADE, related_name="events")
+    actor = models.ForeignKey(Membership, null=True, blank=True, on_delete=models.SET_NULL)
+    action = models.CharField(max_length=40)
+    from_status = models.CharField(max_length=20, blank=True)
+    to_status = models.CharField(max_length=20, blank=True)
+    comment = models.TextField(blank=True)
+
+    class Meta:
+        db_table = "ai_report_event"
+        ordering = ["created_at"]

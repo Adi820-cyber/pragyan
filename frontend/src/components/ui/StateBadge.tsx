@@ -33,6 +33,10 @@ const MAP: Record<string, { label: string; tone: Tone; icon: ComponentType<{ cla
   submitted: { label: "Ready for review", tone: "info", icon: Clock },
   accepted: { label: "Risk accepted", tone: "muted", icon: CheckCircle2 },
   resolved: { label: "Resolved", tone: "ok", icon: CheckCircle2 },
+  // reports
+  draft: { label: "Draft", tone: "muted", icon: Clock },
+  in_review: { label: "In review", tone: "info", icon: Clock },
+  approved: { label: "Approved", tone: "ok", icon: CheckCircle2 },
   // controls
   needs_evidence: { label: "Needs evidence", tone: "warn", icon: AlertTriangle },
   evidence_supplied: { label: "Evidence supplied", tone: "info", icon: Clock },

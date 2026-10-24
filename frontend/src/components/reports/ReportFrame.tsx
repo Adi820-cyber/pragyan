@@ -1,36 +1,39 @@
 "use client";
-
 import { useEffect, useRef, useState } from "react";
 import { Download, Printer } from "lucide-react";
 import { callText, errText } from "@/lib/client/api";
 import { ghostButtonClass } from "@/components/ui/Panel";
 
-export function ReportFrame({ runId }: { runId: string }) {
+export function ReportFrame({ reportId, version }: { reportId: string; version: number }) {
   const [html, setHtml] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const frame = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
     let cancelled = false;
-    callText(`ai/runs/${runId}/report.html/`)
+    callText(`ai/reports/${reportId}/html/`)
       .then((text) => !cancelled && setHtml(text))
       .catch((e) => !cancelled && setError(errText(e)));
     return () => {
       cancelled = true;
     };
-  }, [runId]);
+  }, [reportId]);
 
+  const base = `/api/proxy/ai/reports/${reportId}`;
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2 justify-end">
         <button type="button" className={ghostButtonClass} disabled={!html} onClick={() => frame.current?.contentWindow?.print()}>
           <Printer className="w-4 h-4" aria-hidden="true" /> Print or save as PDF
         </button>
-        <a className={ghostButtonClass} href={`/api/proxy/ai/runs/${runId}/report.json/`} download={`audit-report-${runId}.json`}>
-          <Download className="w-4 h-4" aria-hidden="true" /> Download JSON
-        </a>
-        <a className={ghostButtonClass} href={`/api/proxy/ai/runs/${runId}/report.html/`} download={`audit-report-${runId}.html`}>
+        <a className={ghostButtonClass} href={`${base}/html/?download=1`} download={`audit-report-v${version}.html`}>
           <Download className="w-4 h-4" aria-hidden="true" /> Download HTML
+        </a>
+        <a className={ghostButtonClass} href={`${base}/markdown/`} download={`audit-report-v${version}.md`}>
+          <Download className="w-4 h-4" aria-hidden="true" /> Download Markdown
+        </a>
+        <a className={ghostButtonClass} href={`${base}/html/`} target="_blank" rel="noopener noreferrer">
+          Open print view
         </a>
       </div>
       {error && <p role="alert" className="text-sm text-rose-300">{error}</p>}
