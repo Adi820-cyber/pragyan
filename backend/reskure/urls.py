@@ -99,6 +99,15 @@ router.register(r"ai/findings", ai.FindingViewSet, basename="ai-finding")
 router.register(r"ai/control-assessments", ai.ControlAssessmentViewSet, basename="ai-control-assessment")
 router.register(r"ai/control-evidence", ai.ControlEvidenceViewSet, basename="ai-control-evidence")
 
+# NetBox-style Network & Data Path Traversal
+from apps.network import views as net
+
+router.register(r"network/devices", net.NetworkDeviceViewSet, basename="network-device")
+router.register(r"network/interfaces", net.DeviceInterfaceViewSet, basename="network-interface")
+router.register(r"network/cables", net.CableLinkViewSet, basename="network-cable")
+router.register(r"network/rules", net.PacketInspectionRuleViewSet, basename="network-rule")
+
+
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/v1/ai/overview/", ai.OverviewView.as_view(), name="ai-overview"),
@@ -109,6 +118,9 @@ urlpatterns = [
     path("api/v1/auth/login/", LoginView.as_view(), name="auth-login"),
     path("api/v1/auth/logout/", LogoutView.as_view(), name="auth-logout"),
     path("api/v1/auth/me/", MeView.as_view(), name="auth-me"),
+    path("api/v1/network/trace/", net.PacketTraceView.as_view(), name="network-packet-trace"),
+    path("api/v1/network/topology/", net.NetworkTopologyView.as_view(), name="network-topology"),
+    path("api/v1/network/demo/seed/", net.NetworkSeedDemoView.as_view(), name="network-seed-demo"),
     path("api/v1/", include(router.urls)),
 
     # OpenAPI Schema & Interactive Documentation

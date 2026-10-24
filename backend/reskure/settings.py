@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     "apps.assets.apps.AssetsConfig",
     "apps.secops.apps.SecopsConfig",
     "apps.ai_audit.apps.AiAuditConfig",
+    "apps.network.apps.NetworkConfig",
 ]
 
 MIDDLEWARE = [

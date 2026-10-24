@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { API_BASE, readSession } from "@/lib/server/session";
 
 // Only these API areas are reachable from the browser through this proxy.
-const ALLOWED_PREFIXES = ["ai/", "auth/me"];
+const ALLOWED_PREFIXES = ["ai/", "auth/me", "network/"];
 const WRITE_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
 const PASS_HEADERS = ["content-type", "content-disposition", "content-security-policy", "x-content-type-options"];
 
